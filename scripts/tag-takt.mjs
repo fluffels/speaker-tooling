@@ -1,0 +1,399 @@
+#!/usr/bin/env node
+/**
+ * Tag-Takt (#103): Besitz-Änderungen im Factory-Repo erreichen die Bezieher zeitnah. Je Push auf main und wöchentlich zählt dieses Skript die
+ * Besitz-PRs seit dem letzten Release-Tag (Form `v1.2.3` aus release-tag-lib.mjs, #90) und das Alter der ältesten ungetaggten Änderung.
+ *  - Besitz-PR: ein Commit auf main (erster Elternteil), der einen verteilten Pfad aus `.factory/besitz.json` (Ring `oberflaeche` zählt nicht) oder das
+ *    Manifest selbst berührt. Bewusste Grenze: Pfad-Ebene, nicht Block- oder Schlüssel-Ebene; das zählt eher zu viel als zu wenig.
+ *  - Ab 3 Besitz-PRs, einem ältesten Commit über 7 Tage oder einer Commit-Zeile `<praefixe.commitZeile>Sync-Dringlich: <grund>` in einem Besitz-Commit
+ *    hält das Skript GENAU EIN Kopf-Ticket „🏷️ Tag v<x> setzen und syncen“ (Board-Spitze, Art `tag`) mit Tag-Vorschlag, PRs, CI-Status des
+ *    main-Commits, fertigem Befehl und der Checkliste („Trockenlauf-Sync in einem Bezieher“, CI des Sync-PR je Bezieher). Ein offenes Ticket wird nie verdoppelt, sondern bei
+ *    Änderung aktualisiert (geclaimt: unberührt) und geschlossen, sobald nichts Ungetaggtes mehr da ist.
+ *  - Taggen bleibt Pre-Flight („ja, taggen“, Veröffentlichen); danach setzt der Agent den Tag und erstellt je Bezieher den Sync-PR.
+ *  - Grenze: ein Trockenlauf im Bezieher in CI bräuchte ein Cross-Repo-Token (Secret = Pre-Flight); ohne ihn bleibt die Checkliste.
+ * Bekannte Grenze: der Titel-Marker `🏷️ Tag ` ist breit; ein von Hand angelegtes, vertrauenswürdiges Issue mit diesem Titelanfang zählt als Tag-Ticket (das Emoji-Präfix ist diesem Takt vorbehalten).
+ * In einem Bezieher (es gibt `.factory/sync-stand.json`) tut das Skript nichts. Ohne Release-Tag ebenfalls nichts.
+ *
+ * Aufruf: node scripts/tag-takt.mjs [--dry-run]   (Workflow: .github/workflows/board-takt.yml)
+ * Die Funktionen oben sind pur und getestet (test/tag-takt.test.ts); `main` läuft in test/tag-takt-main.test.ts über injizierte Nähte, die echten git-/gh-Aufrufe unten nicht.
+ */
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { MANIFEST_PFAD as MANIFEST, istGanzeDatei, manifestAusText, wirdVerteilt } from "./besitz-lib.mjs";
+import { istDirektaufruf } from "./direktaufruf.mjs";
+import { liesSyncStand } from "./sync-stand-lib.mjs";
+import { fehlerText, ghJson, ghText } from "./gh-cli.mjs";
+import { bestaetigeAnlegen, inboxStart, vertrauterOwner, zielAktionen, zielZugang } from "./inbox-start-lib.mjs";
+import { zeilenRe } from "./nachweis-lib.mjs";
+import { labelAus } from "./projekt-config-lib.mjs";
+import { WERKZEUG_HINWEIS, teile, vergleicheTags } from "./release-tag-lib.mjs";
+import { commitZeilenAus } from "./slice-override.mjs";
+
+export const TAG_MARKER = "🏷️ Tag ";
+export const MIN_PRS = 3;
+export const MAX_ALTER_TAGE = 7;
+const MAX_ZEILEN = 50;
+const TAG_MS = 86_400_000;
+const CI_WORKFLOW = ".github/workflows/ci.yml";
+const SKRIPT_DATEI = /^scripts\/.*\.(?:mjs|cjs)$/;
+const EXPORT_DEKLARATION = /^export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/gm;
+const EXPORT_LISTE = /^export\s*\{([^}]*)\}/gm;
+
+/** Titel des Tag-Tickets. Pur. */
+export const tagTitel = (tag) => `🏷️ Tag ${tag} setzen und syncen`;
+
+/** Zelle für die Liste: nur sichtbarer Text, ohne `|`, Backticks und Zeilenumbrüche, höchstens 120 Zeichen. Pur. */
+const zelle = (x) =>
+  String(x ?? "")
+    .replace(/[|`\r\n]+/g, " ")
+    .trim()
+    .slice(0, 120) || "-";
+
+/** Pur: Commits aus `git log --first-parent --format=%x1e%H%x1f%cI%x1f%B%x1f --name-only --no-renames` als `{ sha, datum, betreff, body, dateien[] }`. */
+export function commitsAusLog(text) {
+  return String(text)
+    .split("\x1e")
+    .filter((c) => c.trim() !== "")
+    .map((c) => {
+      const [sha, datum, body = "", dateien = ""] = c.split("\x1f");
+      return {
+        sha: sha.trim(),
+        datum: datum.trim(),
+        betreff: body.split(/\r?\n/)[0].trim(),
+        body: body.replace(/\r/g, ""),
+        dateien: dateien.split(/\r?\n/).map((d) => d.trim()).filter(Boolean),
+      };
+    });
+}
+
+/** Pur: die Besitz-Commits (Pfad-Ebene) mit `pr` = letztes `(#N)` im Betreff, sonst die Kurz-SHA. `manifest` = `{ eintraege: [{ pfad, ring }] }`. */
+export function besitzCommits(commits, manifest) {
+  const pfade = [...(manifest?.eintraege ?? []).filter(wirdVerteilt).map((e) => e.pfad), MANIFEST];
+  const beruehrt = (datei) => pfade.some((p) => datei === p || datei.startsWith(`${p}/`));
+  return commits
+    .filter((c) => c.dateien.some(beruehrt))
+    .map((c) => {
+      const nr = [...c.betreff.matchAll(/\(#(\d+)\)/g)].pop()?.[1];
+      return { ...c, pr: nr ? `#${nr}` : c.sha.slice(0, 7) };
+    });
+}
+
+/** Pur: die exportierten Namen eines ES-Moduls (`export const|let|var|function|async function|class NAME` und `export { a, b as c }`, bei `as` zählt der äußere Name) als Set. */
+export function exporteAus(text) {
+  const namen = new Set();
+  const src = String(text ?? "");
+  for (const m of src.matchAll(EXPORT_DEKLARATION)) namen.add(m[1]);
+  for (const m of src.matchAll(EXPORT_LISTE)) {
+    for (const teil of m[1].split(",")) {
+      const name = teil.trim().split(/\s+as\s+/).pop();
+      if (name) namen.add(name);
+    }
+  }
+  return namen;
+}
+
+/** Pur: die Namen, die `altText` exportiert und `neuText` nicht mehr (`null` = Datei gelöscht: alle). Sortiert. */
+export function entfernteExporte(altText, neuText) {
+  const neu = exporteAus(neuText);
+  return [...exporteAus(altText)].filter((n) => !neu.has(n)).sort();
+}
+
+/** Pur: die in den Besitz-Commits berührten Skript-Dateien (`scripts/**.mjs|cjs`), die ein verteilter Ganzdatei-Eintrag des Manifests abdeckt. Sortiert, ohne Doppelte. */
+export function verteilteSkripte(besitz, manifest) {
+  const pfade = (manifest?.eintraege ?? []).filter((e) => wirdVerteilt(e) && istGanzeDatei(e)).map((e) => e.pfad);
+  const gedeckt = (d) => pfade.some((p) => d === p || d.startsWith(`${p}/`));
+  return [...new Set(besitz.flatMap((c) => c.dateien).filter((d) => SKRIPT_DATEI.test(d) && gedeckt(d)))].sort();
+}
+
+/** Pur: der vorgeschlagene nächste Tag nach Conventional Commits (`!` oder `BREAKING CHANGE:` oder ein entfernter Export, `entfernt` = `[{ datei, namen }]`, Major; `feat` Minor, sonst Patch); unter v1 (0.y.z) hebt Breaking nur das Minor (SemVer §4), v1.0.0 setzt man bewusst; `v` bleibt erhalten. */
+export function naechsterTag(letzterTag, commits, entfernt = []) {
+  const [major, minor, patch] = teile(letzterTag);
+  const breaking = (c) => /^[a-z]+(\([^)]*\))?!:/.test(c.betreff) || /^(?:\* )?BREAKING[ -]CHANGE:/m.test(c.body);
+  const feature = (c) => /^feat(\([^)]*\))?:/.test(c.betreff);
+  const stufe = major === 0 ? [0, minor + 1, 0] : [major + 1, 0, 0];
+  const neu = commits.some(breaking) || entfernt.length > 0 ? stufe : commits.some(feature) ? [major, minor + 1, 0] : [major, minor, patch + 1];
+  return `${letzterTag.startsWith("v") ? "v" : ""}${neu.join(".")}`;
+}
+
+/** Pur: das Dringlich-Signal (`{ grund, sha }` der ersten Zeile `<dringlichKey>: <grund>` mit nicht leerem Grund) in den Besitz-Commits oder `null`. */
+export function dringlichSignal(besitz, dringlichKey) {
+  for (const c of besitz) {
+    const treffer = [...c.body.matchAll(zeilenRe(dringlichKey))].find((m) => m[2].trim() !== "");
+    if (treffer) return { grund: treffer[2].trim(), sha: c.sha };
+  }
+  return null;
+}
+
+/** Pur: die Migrationshinweise für Bezieher (`[{ pr, text }]`): jede Zeile `<migrationKey>: <text>` mit nicht leerem Text in den Besitz-Commits (Nicht-Besitz-Commits zählen nicht). */
+export function bezieherMigrationen(besitz, migrationKey) {
+  return besitz.flatMap((c) => [...c.body.matchAll(zeilenRe(migrationKey))].map((m) => ({ pr: c.pr, text: m[2].trim() })).filter((x) => x.text !== ""));
+}
+
+/** Pur: das Alter der ältesten Änderung in ganzen Tagen (Kommazahl) oder `null`; `datum` ISO. */
+const alterTage = (besitz, jetzt) => (besitz.length === 0 ? null : (jetzt.getTime() - Math.min(...besitz.map((c) => Date.parse(c.datum)))) / TAG_MS);
+
+/**
+ * Pur: die Entscheidung des Takts. `offene` = vertraute offene Issues `[{ number, titel, assignees }]`; Rückgabe `{ aktion, grund, warnungen, nummer?, ausloeser? }`
+ * mit `aktion` `anlegen | aktualisieren | schliessen | nichts`. Ohne Release-Tag nichts; ein geclaimtes Ticket bleibt unberührt.
+ */
+export function entscheideTagTakt({ letzterTag, besitz, jetzt, offene, dringlichKey }) {
+  const warnungen = [];
+  const tagOffene = offene.filter((i) => i.titel.startsWith(TAG_MARKER)).sort((a, b) => a.number - b.number);
+  if (tagOffene.length > 1) warnungen.push(`Mehrere offene Tag-Tickets (${tagOffene.map((i) => `#${i.number}`).join(", ")}): das älteste gilt, keines wird geschlossen.`);
+  if (!letzterTag) return { aktion: "nichts", grund: "kein Release-Tag in der Historie", warnungen };
+  const offen = tagOffene[0];
+  if (offen) {
+    if (offen.assignees.length > 0) return { aktion: "nichts", grund: `Ticket #${offen.number} ist geclaimt`, warnungen, geclaimt: offen.number };
+    if (besitz.length === 0) {
+      if (tagOffene.length > 1) return { aktion: "nichts", grund: "nichts Ungetaggtes, aber mehrere offene Tickets (keine Selbst-Schließung)", warnungen };
+      return { aktion: "schliessen", nummer: offen.number, grund: "keine ungetaggten Besitz-PRs mehr", warnungen };
+    }
+    return { aktion: "aktualisieren", nummer: offen.number, grund: `offenes Ticket #${offen.number}`, warnungen };
+  }
+  const tage = alterTage(besitz, jetzt);
+  const dringlich = dringlichSignal(besitz, dringlichKey);
+  const ausloeser = [];
+  if (besitz.length >= MIN_PRS) ausloeser.push(`${besitz.length} Besitz-PRs seit ${letzterTag} (ab ${MIN_PRS})`);
+  if (tage !== null && tage > MAX_ALTER_TAGE) ausloeser.push(`älteste ungetaggte Änderung über ${MAX_ALTER_TAGE} Tage alt`);
+  if (dringlich) ausloeser.push(`Dringlich: ${zelle(dringlich.grund)} (${dringlich.sha.slice(0, 7)})`);
+  if (ausloeser.length === 0) return { aktion: "nichts", grund: `${besitz.length} Besitz-PRs, jünger als ${MAX_ALTER_TAGE} Tage, kein Dringlich-Signal`, warnungen };
+  return { aktion: "anlegen", grund: ausloeser.join("; "), ausloeser, warnungen };
+}
+
+/**
+ * Zweitabfrage vor dem Anlegen (fail-closed): die REST-Liste hinkt bei frischen Tickets nach. `zweit()` liefert `[{ number, titel }]`; kennt es ein offenes
+ * Tag-Ticket oder wirft es, wird aus `anlegen` ein `nichts` mit Warnung. Jede andere Aktion bleibt unberührt. Pur.
+ */
+export const bestaetigeTagAnlegen = (e, { zweit }) => bestaetigeAnlegen(e, { zweit, passt: (i) => String(i?.titel).startsWith(TAG_MARKER), was: "Tag-Ticket" });
+
+/** Pur: CI-Zustand des main-Commits aus den Workflow-Läufen (`[{ path, status, conclusion, html_url }]`, neueste zuerst) als `{ zustand: gruen|rot|laeuft|unbekannt, url }`. */
+export function ciZustand(laeufe) {
+  const lauf = (Array.isArray(laeufe) ? laeufe : []).find((r) => r?.path === CI_WORKFLOW);
+  if (!lauf) return { zustand: "unbekannt", url: null };
+  const url = typeof lauf.html_url === "string" ? lauf.html_url : null;
+  if (lauf.status !== "completed") return { zustand: "laeuft", url };
+  return { zustand: lauf.conclusion === "success" ? "gruen" : "rot", url };
+}
+
+const CI_TEXT = { gruen: "grün", rot: "ROT", laeuft: "läuft noch (Stand des Takts; nächster Push auf main oder Montagslauf aktualisiert)", unbekannt: "unbekannt" };
+
+/** Pur: Body des Tag-Tickets. `prs` = `besitzCommits`, `aeltestes` = `{ datum, sha }`, `ci` = `ciZustand`. */
+export function tagBody({ tag, letzterTag, sha, prs, aeltestes, ausloeser, ci, entfernt = [], migrationen = [] }) {
+  const wt = `.claude/worktrees/tag-${tag}`;
+  const zeilen = prs.slice(0, MAX_ZEILEN).map((c) => `- ${c.pr} ${zelle(c.betreff)} (${c.datum.slice(0, 10)})`);
+  if (prs.length > MAX_ZEILEN) zeilen.push(`- … und ${prs.length - MAX_ZEILEN} weitere`);
+  return [
+    `Besitz-Änderungen liegen ungetaggt auf main. Auslöser: ${ausloeser.join("; ")}.`,
+    "",
+    `- Vorgeschlagener Tag: \`${tag}\` (Basis ${letzterTag}, Vorschlag nach Conventional Commits)`,
+    `- Älteste ungetaggte Änderung: ${aeltestes.datum.slice(0, 10)} (${aeltestes.sha.slice(0, 7)})`,
+    `- main-Commit: \`${sha}\``,
+    ...entfernt.map((x) => `- Entfernte Exporte (Breaking): \`${x.datei}\`: ${x.namen.join(", ")}`),
+    `- CI-Status dieses Commits: ${CI_TEXT[ci.zustand] ?? CI_TEXT.unbekannt}${ci.url ? ` ([Lauf](${ci.url}))` : ""}`,
+    "",
+    `Besitz-PRs seit ${letzterTag} (${prs.length}):`,
+    ...zeilen,
+    "",
+    "Bezieher-Migration (Commit-Zeilen der Besitz-PRs, je Bezieher zu erledigen):",
+    ...(migrationen.length > 0 ? migrationen.map((m) => `- ${m.pr} ${zelle(m.text)}`) : ["- keine gemeldet"]),
+    "",
+    "Befehl (erst nach „ja, taggen“; CI des Commits vorher grün). Der Hook blockiert `git tag` und `git push <tag>` im geteilten Hauptcheckout, darum aus einem eigenen Worktree auf dem Commit (das Entfernen nur mit cwd außerhalb des Worktrees):",
+    "",
+    "```",
+    "git fetch origin --tags",
+    `gh run list --commit ${sha} --workflow ci.yml`,
+    `git worktree add --detach ${wt} ${sha}`,
+    `git -C ${wt} tag -a ${tag} ${sha} -m "${tag}"`,
+    `git -C ${wt} push origin ${tag}`,
+    `git worktree remove ${wt}`,
+    "```",
+    "",
+    "Checkliste:",
+    `- [ ] Trockenlauf-Sync je Bezieher gegen dessen frischen Stand, nie gegen einen lokalen Checkout hinter \`origin/main\`: erst \`gh repo clone <bezieher> <leerer-ordner> -- --depth 1\` (oder \`git -C <checkout> fetch origin\` und \`git -C <checkout> archive origin/main | tar -x -C <leerer-ordner>\`), dann \`node scripts/factory-sync.mjs --quelle <checkout auf ${sha.slice(0, 7)}> --ziel <leerer-ordner> --entwurf --trocken\` (die Bezieher nennt die Maintainerin oder \`arbeitsplatz.repos\` in der Projekt-Config des Arbeitsplatzes, der sie führt; \`node scripts/arbeitsplatz.mjs pfade\` nennt im Factory-Repo keinen Bezieher). Er meldet auch die Kontextgröße gegen das Budget des Ziels`,
+    "- [ ] Pre-Flight „ja, taggen“ (Veröffentlichen) bei der Maintainerin einholen",
+    `- [ ] Tag \`${tag}\` setzen (Befehl oben)`,
+    `- [ ] Sync-PR je Bezieher mit \`--tag ${tag}\` (dort das Ticket „🔄 Factory-Update“: im Bezieher erst \`node scripts/ticket-lock.mjs claim <nr>\` für dieses Ticket, dann den Worktree anlegen; ein vorhandener Worktree lässt den Claim mit Exit 4 scheitern. Plan-Nachweis im Sync-PR: \`<Präfix des Beziehers>Plan: ohne — Factory-Sync ${tag}\` (der Bezieher-Wächter kennt nur den eigenen Planer). Vor dem PR im Bezieher \`npm run verify:kompakt\` voll fahren, gezielte Tests ersetzen es nicht. Anstoßen per \`gh workflow run factory-update.yml --repo <bezieher>\`). ${WERKZEUG_HINWEIS} Im Ziel danach \`npm run docs:gen\` fahren und mitcommitten (Refs und Index der Factory-Links schreibt der Sync mit; \`npm run check:factorylinks -- --schreiben --quelle <checkout auf ${sha.slice(0, 7)}>\` nur als Reparaturweg, falls \`docs:gen\` neue Factory-Links erzeugt hat); bei einer Kontext-Warnung den Projekt-Block kürzen, nie Wächter-gebundene Sätze (Wächter binden Projekt-Block-Sätze wörtlich)`,
+    "- [ ] CI des Sync-PR je Bezieher grün (der Trockenlauf fährt kein verify); rot durch Factory-Besitz: Fix upstream per PR, dann Patch-Tag auf den Fix-Commit, ein gesetzter Tag wird nie verschoben",
+    "- [ ] Bezieher-Migrationen (Abschnitt oben) je Bezieher erledigt; Projektkopien abgelöster Kern-Tests im Bezieher abgleichen (projekteigen bleibt nur die Abdeckung der Projektwerte)",
+    "- [ ] Befunde aus dem Sync: Kern-Befunde als Zeile ins Harness-Sammelticket der Factory, nur den Bezieher betreffende als Issue ins Bezieher-Repo",
+    "- [ ] Ticket schließen, sobald Tag und Sync-PRs stehen und deren CI grün ist (ein geclaimtes Ticket schließt der Takt nicht selbst; ohne Assignee schließt er es beim nächsten Lauf)",
+    "",
+    "Grenze: ein Trockenlauf im Bezieher in CI bräuchte ein Cross-Repo-Token (Secret anlegen ist Pre-Flight); ohne ihn bleibt die Checkliste. Vorschau dieses Takts: `node scripts/tag-takt.mjs --dry-run`. Mechanik: docs/agent-harness.md › Tag-Takt (#103).",
+  ].join("\n");
+}
+
+const KOMMENTAR_ERLEDIGT = "Keine ungetaggten Besitz-PRs mehr (Tag gesetzt), automatisch geschlossen.";
+
+/** Entfernte Exporte je verteilter Skript-Datei zwischen Tag und `sha`: `[{ datei, namen }]`. Ohne `io.zeigeDatei` oder wenn die Datei am Tag fehlte (neu): leer. `manifest` = Vereinigung von Tag und HEAD. */
+function entfernteJeDatei(io, { letzterTag, besitz, sha, manifest }) {
+  if (!io.zeigeDatei) return [];
+  const treffer = [];
+  for (const datei of verteilteSkripte(besitz, manifest)) {
+    const namen = entfernteExporte(io.zeigeDatei(letzterTag, datei), io.zeigeDatei(sha, datei));
+    if (namen.length > 0) treffer.push({ datei, namen });
+  }
+  return treffer;
+}
+
+/** Das Manifest am Tag (fehlt oder kaputt: leer), damit eine inzwischen gelöschte oder umbenannte verteilte Datei als verteilt zählt. */
+function tagManifest(io, letzterTag) {
+  const g = manifestAusText(io.zeigeDatei && letzterTag ? io.zeigeDatei(letzterTag, MANIFEST) : null);
+  return g.manifest ?? { eintraege: [] };
+}
+
+/** Liest alles Nötige; wirft bei einem Git-Fehler. `io.ladeLaeufe` darf werfen (dann `unbekannt`). */
+function sammle(io, log) {
+  const letzterTag = vergleicheTags(io.tags());
+  const commits = letzterTag ? commitsAusLog(io.ladeLog(letzterTag)) : [];
+  const kopf = io.ladeManifest();
+  const manifest = { eintraege: [...tagManifest(io, letzterTag).eintraege, ...kopf.eintraege] };
+  const besitz = besitzCommits(commits, manifest);
+  const sha = io.headSha();
+  let ci = { zustand: "unbekannt", url: null };
+  try {
+    ci = ciZustand(io.ladeLaeufe(sha));
+  } catch (err) {
+    log(`CI-Status nicht lesbar (${fehlerText(err)}), im Ticket steht „unbekannt“.`);
+  }
+  return { letzterTag, besitz, sha, ci, migrationen: io.migrationKey ? bezieherMigrationen(besitz, io.migrationKey) : [], entfernt: entfernteJeDatei(io, { letzterTag, besitz, sha, manifest }) };
+}
+
+/** Führt die Aktion aus. Rückgabe: true bei Fehler. */
+function fuehreAus(e, io, log) {
+  try {
+    if (e.aktion === "schliessen") {
+      io.schliesse(e.nummer, KOMMENTAR_ERLEDIGT);
+      log(`Tag-Ticket #${e.nummer} geschlossen.`);
+      return false;
+    }
+    const { titel, body } = e.soll;
+    if (e.aktion === "aktualisieren") {
+      io.aktualisiere(e.nummer, titel, body);
+      log(`Tag-Ticket #${e.nummer} aktualisiert (${titel}).`);
+      return false;
+    }
+    const nr = io.legeIssueAn(titel, body);
+    log(`Tag-Ticket angelegt: #${nr} (${titel})`);
+    if (!io.projectToken) log("::warning::PROJECT_TOKEN fehlt: das Ticket steht nicht oben im Board.");
+    else if (!io.sortiereEin(nr, "tag")) {
+      log(`::error::Einsortieren von #${nr} an die Board-Spitze fehlgeschlagen.`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    log(`::error::Tag-Ticket (${e.aktion}) nicht geschrieben: ${fehlerText(err)}`);
+    return true;
+  }
+}
+
+/** Pur: Soll-Titel und Soll-Body des Tickets. */
+function sollTicket(e, { letzterTag, besitz, sha, ci, entfernt, migrationen }) {
+  const tag = naechsterTag(letzterTag, besitz, entfernt);
+  const aeltestes = besitz.reduce((a, c) => (Date.parse(c.datum) < Date.parse(a.datum) ? c : a));
+  const ausloeser = e.ausloeser ?? [`${besitz.length} Besitz-PRs seit ${letzterTag}`];
+  return { titel: tagTitel(tag), body: tagBody({ tag, letzterTag, sha, prs: besitz, aeltestes, ausloeser, ci, entfernt, migrationen }) };
+}
+
+/** Pur: stimmt das offene Ticket mit dem Soll überein? */
+const istAktuell = (offen, soll) => offen?.titel === soll.titel && offen.body === soll.body;
+
+/** Entscheidung samt Soll-Ticket (`soll` bei anlegen/aktualisieren); ein bereits aktuelles Ticket wird zu `nichts`. */
+function plane({ io, daten, offene, trocken }) {
+  let e = entscheideTagTakt({ letzterTag: daten.letzterTag, besitz: daten.besitz, jetzt: io.jetzt(), offene, dringlichKey: io.dringlichKey });
+  if (e.aktion === "anlegen" && !trocken) e = bestaetigeTagAnlegen(e, { zweit: io.frischeOffene });
+  if (trocken && e.geclaimt && daten.besitz.length > 0) return { ...e, soll: sollTicket(e, daten) };
+  if (e.aktion !== "anlegen" && e.aktion !== "aktualisieren") return e;
+  const soll = sollTicket(e, daten);
+  if (e.aktion === "aktualisieren" && istAktuell(offene.find((i) => i.number === e.nummer), soll)) return { ...e, aktion: "nichts", grund: "Ticket ist aktuell", soll };
+  return { ...e, soll };
+}
+
+/** Ein Lauf. Exit 0 (auch „nichts zu tun“), 1 bei Lese- oder Schreibfehler. `io` siehe `main`; `trocken` schreibt nichts. */
+export function lauf({ io, trocken = false }) {
+  const log = io.log ?? console.log;
+  if (io.istBezieher()) {
+    log("Tag-Takt: Bezieher-Repo (Sync-Stand vorhanden), nichts zu tun.");
+    return 0;
+  }
+  let daten;
+  let offene;
+  try {
+    daten = sammle(io, log);
+    offene = io.ladeOffene();
+  } catch (err) {
+    log(`::error::Tag-Takt: Lesen fehlgeschlagen: ${fehlerText(err)}`);
+    return 1;
+  }
+  const e = plane({ io, daten, offene, trocken });
+  for (const w of e.warnungen) log(`::warning::${w}`);
+  log(`Tag-Takt: ${e.aktion}${e.nummer ? ` #${e.nummer}` : ""} (${e.grund})`);
+  if (trocken) {
+    if (e.soll) log([e.soll.titel, ...e.soll.body.split("\n")].map((z) => `[dry-run] ${z}`).join("\n"));
+    return 0;
+  }
+  return e.aktion === "nichts" ? 0 : fuehreAus(e, io, log) ? 1 : 0;
+}
+
+// ---- IO (ungetestet) ----
+
+/** git-Aufruf mit abgefangenem stderr (ein erwarteter Fehlschlag, z. B. `git show` einer neuen Datei, schreibt nichts ins Log); die Meldung bleibt im geworfenen Fehler. */
+export const gitEcht = (args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+
+/** Standard-Lader des Manifests unter `wurzel`: wirft die einheitliche Meldung (`manifestAusText`), wenn es fehlt oder kaputt ist. */
+export function manifestLaden(wurzel) {
+  const voll = join(wurzel, ...MANIFEST.split("/"));
+  const g = manifestAusText(existsSync(voll) ? readFileSync(voll, "utf8") : null);
+  if (g.fehler !== undefined) throw new Error(g.text);
+  return g.manifest;
+}
+
+/** Einstieg. `deps` (Tests): `start`, `gh`, `log`, `err`, `git` (`args -> stdout`), `wurzel` (Ordner des Sync-Stands), `env` (Standard `process.env`; liefert `PROJECT_TOKEN`), `ladeManifest`. Rückgabe: Exit-Code. */
+export async function main(argv = process.argv.slice(2), { start = inboxStart, gh = { text: ghText, json: ghJson }, log = console.log, err = console.error, git = gitEcht, wurzel = process.cwd(), env = process.env, ladeManifest = () => manifestLaden(wurzel) } = {}) {
+  const s = await start(argv, { skript: "tag-takt", praefix: "Tag-Takt: Projekt-Config nicht lesbar: ", log, err });
+  if (s.code !== undefined) return s.code;
+  const { config, libs } = s;
+  const { REPO, ladeSammelKontext, vertrauteIssues, frischeOffeneIssues } = libs;
+  const { ziel, zielOpt } = zielZugang(libs);
+  const aktion = zielAktionen({ gh, libs, label: labelAus(config, "harness"), env });
+  const io = {
+    log,
+    istBezieher: () => liesSyncStand(wurzel).zustand !== "fehlt",
+    tags: () => git(["tag", "--merged", "HEAD"]).split(/\r?\n/).map((t) => t.trim()).filter(Boolean),
+    ladeLog: (tag) => git(["log", "--first-parent", "--format=%x1e%H%x1f%cI%x1f%B%x1f", "--name-only", "--no-renames", `${tag}..HEAD`, "--"]),
+    ladeManifest,
+    headSha: () => git(["rev-parse", "HEAD"]).trim(),
+    zeigeDatei: (ref, pfad) => {
+      try {
+        return git(["show", `${ref}:${pfad}`]);
+      } catch {
+        return null;
+      }
+    },
+    ladeLaeufe: (sha) => gh.json(["api", `repos/${REPO}/actions/runs?head_sha=${sha}&event=push&per_page=30`, "--jq", ".workflow_runs"]),
+    ladeOffene: () => {
+      const kontext = ladeSammelKontext({ ladeKommentare: () => [] });
+      return vertrauteIssues(kontext.rohe, vertrauterOwner(kontext, libs))
+        .filter((i) => i.title.startsWith(TAG_MARKER))
+        .map((i) => ({ number: i.number, titel: i.title, assignees: (i.assignees ?? []).map((a) => a?.login).filter(Boolean), body: String(i.body ?? "") }));
+    },
+    frischeOffene: () => frischeOffeneIssues({ repo: ziel, anzahl: 50, mitBoard: false }, zielOpt),
+    dringlichKey: commitZeilenAus(config).syncDringlich,
+    migrationKey: commitZeilenAus(config).bezieherMigration,
+    jetzt: () => new Date(),
+    projectToken: env.PROJECT_TOKEN,
+    legeIssueAn: aktion.legeIssueAn,
+    sortiereEin: (nr, art) => {
+      try {
+        aktion.platziere(nr, art);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    aktualisiere: (nr, titel, body) => aktion.aktualisiere(nr, body, titel),
+    schliesse: aktion.schliesse,
+  };
+  return lauf({ io, trocken: s.trocken });
+}
+
+if (istDirektaufruf(import.meta.url)) process.exitCode = await main();
