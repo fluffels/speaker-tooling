@@ -1,0 +1,15 @@
+{
+  "$kommentar": "Spiegel des Rulesets main-schutz (Server-Konfiguration, nicht in Git). Leser: die Doctor-Punkte Ruleset, Code-Scanning und Required-Check-Quellen (node scripts/harness-doctor.mjs --pruefen). Ändert sich das Ruleset, hier im selben PR nachziehen. Abgleich mit dem Server: docs/referenz/befehle.md#ruleset-spiegel-abgleichen (braucht Schreibrecht wegen bypass_actors, darum nicht in der CI).",
+  "id": 26522425,
+  "name": "main-schutz",
+  "stand": "2026-11-07",
+  "requiredChecks": [
+    "Tests, Typecheck & Builds",
+    "Security-Audit (npm audit)",
+    "PR-Text interne Bezuege pruefen"
+  ],
+  "codeScanning": [
+    { "tool": "CodeQL", "sicherheitsSchwelle": "high_or_higher", "alertSchwelle": "errors" }
+  ],
+  "bypassActors": []
+}
