@@ -11,6 +11,17 @@ npm run setup   # einmalig: Node-Check, Skill-Zeiger, npm install, Git-Hooks
 npm run verify  # alle schnellen Gates auf einmal
 ```
 
+## Ruleset-Spiegel abgleichen
+
+`.github/ruleset-main-schutz.json` spiegelt das Server-Ruleset `main-schutz`. Dieser Abgleich (Git Bash, macOS) nennt jede Differenz als `diff`-Zeile (`<` Spiegel, `>` Server) und endet mit Exit 0 und „Spiegel = Server“, wenn beides gleich ist. Er braucht Schreibrecht (die API liefert `bypass_actors` nur damit), läuft deshalb nicht in der CI. Ändert sich das Ruleset, wird der Spiegel im selben PR nachgezogen.
+
+```bash
+SPIEGEL=.github/ruleset-main-schutz.json
+diff <(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));for(const z of [`id ${s.id}`,`name ${s.name}`,...s.requiredChecks.map(c=>`requiredCheck ${c}`),...(s.codeScanning??[]).map(c=>`codeScanning ${c.tool} ${c.sicherheitsSchwelle} ${c.alertSchwelle}`),...s.bypassActors.map(b=>`bypassActor ${JSON.stringify(b)}`)])console.log(z)' "$SPIEGEL" | sort) \
+     <(gh api "repos/{owner}/{repo}/rulesets/$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).id' "$SPIEGEL")" --jq '"id \(.id)", "name \(.name)", (.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[]|"requiredCheck \(.context)"), (.rules[]|select(.type=="code_scanning")|.parameters.code_scanning_tools[]|"codeScanning \(.tool) \(.security_alerts_threshold) \(.alerts_threshold)"), (.bypass_actors[]|"bypassActor \(tojson)")' | sort) \
+  && echo "Spiegel = Server"
+```
+
 ## Alle Skripte
 
 | Befehl | Wofür |

@@ -62,6 +62,9 @@
   },
   "struktur": {
     "quelle": "backend",
+    "endungen": [".java"],
+    "ohne": ["**/src/test/**", "**/target/**"],
+    "docmapEinheit": "ordner",
     "moduldoku": "docs/module"
   },
   "bereiche": {
