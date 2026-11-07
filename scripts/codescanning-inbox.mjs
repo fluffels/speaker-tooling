@@ -25,11 +25,15 @@ import { fileURLToPath } from "node:url";
 import { istDirektaufruf } from "./direktaufruf.mjs";
 import { readFileSync } from "node:fs";
 import { fehlerText, ghJson, ghText } from "./gh-cli.mjs";
-import { ladeBoardLibs, inboxStart, vertrauterOwner, zielAktionen } from "./inbox-start-lib.mjs";
-import { escapeRegex } from "./ticket-namen.mjs";
+import { ladeBoardLibs, inboxStart, sicherheitsLibs, vertrauterOwner, zielAktionen } from "./inbox-start-lib.mjs";
+import { bereiteMeldung } from "./meldung-lib.mjs";
+import { escapeRegex } from "./regex-lib.mjs";
 import { istVertraut } from "./fremdtext-lib.mjs";
 import { bekannteGhsa, ghsaIn, vertrauteBodies } from "./ghsa-lib.mjs";
 import { labelAus } from "./projekt-config-lib.mjs";
+import { factorySeiteIn } from "./factory-seite.mjs";
+
+const WURZEL = fileURLToPath(new URL("..", import.meta.url));
 
 export const ZIEL_TITEL = "🔒 Security: Code-Scanning-Befunde auflösen";
 const SPITZEN_TOOLS = ["CodeQL"];
@@ -245,7 +249,7 @@ export function issueBody(gruppen, repo = "<owner>/<repo>") {
     "",
     ...zeilen,
     "",
-    `Prüfauftrag: je Regel beheben, mit Grund dismissen oder per Wiedervorlage \`codescanning-<slug>\` zurückstellen. Details: \`gh api repos/${repo}/code-scanning/alerts/<nummer>\`. Dismiss: \`gh api -X PATCH repos/${repo}/code-scanning/alerts/<nummer> -f state=dismissed -f dismissed_reason="won't fix" -f dismissed_comment="<Grund, Ticket>"\` (Gründe: \`won't fix\`, \`false positive\`, \`used in tests\`). Die Liste wird wöchentlich aktualisiert; bei null Funden schließt der Lauf dieses Ticket selbst. Mechanik: docs/ticket-reihenfolge.md › Code-Scanning-Inbox.`,
+    `Prüfauftrag: je Regel beheben, mit Grund dismissen oder per Wiedervorlage \`codescanning-<slug>\` zurückstellen. Details: \`gh api repos/${repo}/code-scanning/alerts/<nummer>\`. Dismiss: \`gh api -X PATCH repos/${repo}/code-scanning/alerts/<nummer> -f state=dismissed -f dismissed_reason="won't fix" -f dismissed_comment="<Grund, Ticket>"\` (Gründe: \`won't fix\`, \`false positive\`, \`used in tests\`). Die Liste wird wöchentlich aktualisiert; bei null Funden schließt der Lauf dieses Ticket selbst. Mechanik: ${factorySeiteIn(WURZEL, "docs/ticket-reihenfolge.md", "code-scanning-inbox-1436")}.`,
   ].join("\n");
 }
 
@@ -363,15 +367,20 @@ function fuehreIssueAus(issue, io, log) {
   return rot;
 }
 
-/** Postet die Zeilen ins Sammelticket. Rückgabe: true bei Fehler. */
+/** Postet die Zeilen ins Sammelticket (im Bezieher das Rest-Ticket im eigenen Repo), nach der Sperrprüfung (`bereiteMeldung`, ohne Stand-Zeile; `io.bereite` ist die Test-Naht). Rückgabe: true bei Fehler. */
 function postZeilenAus(zeilen, io, log) {
   try {
+    const meldung = (io.bereite ?? ((z, o) => bereiteMeldung(z, o)))(zeilen.map(zeilenText), { stand: null });
+    if (!meldung.ok) {
+      log(`::error::${meldung.grund}`);
+      return true;
+    }
     const ziel = io.zielSammelticket();
     if (!ziel) {
       log("::error::Kein ungeclaimtes Harness-Sammelticket für die Code-Scanning-Zeilen.");
       return true;
     }
-    io.postZeilen(ziel, zeilen.map(zeilenText).join("\n"));
+    io.postZeilen(ziel, meldung.text);
     log(`${zeilen.length} Zeile(n) in #${ziel}.`);
     return false;
   } catch (err) {
@@ -469,11 +478,12 @@ function gemerkt(lade) {
   };
 }
 
-/** Einstieg. `deps` (Tests): `ladeConfig()`, `ladeLibs()` (liefert `REPO`, `SAMMELTICKET_TITEL_LISTE` und die Inbox-Bausteine), `ladeSeiten(pfad)`, `ladeDatei(pfad, commit)`, `gh` (`{ text, json }`, Standard: echtes gh), `log`, `err`. Rückgabe: Exit-Code. */
-export async function main(argv = process.argv.slice(2), { ladeLibs = ladeBoardLibs, ladeConfig, ladeSeiten = seiten, ladeDatei, gh = { text: ghText, json: ghJson }, log = console.log, err = console.error } = {}) {
+/** Einstieg. `deps` (Tests): `ladeConfig()`, `ladeLibs()` (liefert `REPO`, `SAMMELTICKET_TITEL_LISTE` und die Inbox-Bausteine), `ladeSeiten(pfad)`, `ladeDatei(pfad, commit)`, `gh` (`{ text, json }`, Standard: echtes gh), `bezieher` (Standard: Sync-Stand vorhanden; im Bezieher liegen Tickets und Zeilen im eigenen Repo), `bereite` (Sperrprüfung der Zeilen, Standard `bereiteMeldung`), `log`, `err`. Rückgabe: Exit-Code. */
+export async function main(argv = process.argv.slice(2), { ladeLibs = ladeBoardLibs, ladeConfig, ladeSeiten = seiten, ladeDatei, gh = { text: ghText, json: ghJson }, bezieher, bereite, log = console.log, err = console.error } = {}) {
   const start = await inboxStart(argv, { skript: "codescanning-inbox", praefix: "Code-Scanning-Inbox: Projekt-Config nicht lesbar: ", ladeLibs, ladeConfig, log, err });
   if (start.code !== undefined) return start.code;
-  const { trocken, config, libs } = start;
+  const { trocken, config } = start;
+  const libs = sicherheitsLibs(start.libs, { bezieher, log, gh });
   const { REPO, postZeilen, ladeSammelKontext, vertrauteIssues, waehleSammelticket } = libs;
   const aktion = zielAktionen({ gh, libs, label: labelAus(config, "harness") });
   let offene = [];
@@ -510,6 +520,7 @@ export async function main(argv = process.argv.slice(2), { ladeLibs = ladeBoardL
     schliesse: (nr, kommentar = KOMMENTAR_LEER) => aktion.schliesse(nr, kommentar),
     zielSammelticket: () => waehleSammelticket(offene)?.number ?? null,
     postZeilen,
+    bereite,
   };
   return lauf({ io, trocken });
 }

@@ -1,5 +1,7 @@
 # Anlaufstellen: der Index des Projekt-Brains
 
+Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improving-agent-harness-and-factory/blob/v0.9.0/docs/referenz/anlaufstellen.md)
+
 > Das Projekt-Brain ist `docs/` (Prinzipien: ADR 0015 der Fabrik), diese Seite der Index. Erst hier die eine passende Seite wählen, dann mit dem `Read`-Werkzeug lesen, große Seiten abschnittsweise. Harte Regeln stehen nur in [AGENTS.md](../../AGENTS.md); hier steht nur, wo etwas liegt und wann man es liest. Laufender Stand (offene Arbeit) gehört in Issues und Board, nicht hierher.
 
 ## Regeln und Einstieg

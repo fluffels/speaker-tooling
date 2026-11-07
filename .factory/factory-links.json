@@ -1,6 +1,16 @@
 {
   "repo": "fluffels/self-improving-agent-harness-and-factory",
-  "tag": "v0.8.0",
-  "commit": "ef472d5aafc2547411708950c947c004f89968e0",
-  "ziele": {}
+  "tag": "v0.9.0",
+  "commit": "13131bc43f604f05428a65968c8ba169d00f8ed5",
+  "ziele": {
+    "docs/agent-harness-faq.md": ["","der-auto-mode-blockt-die-sabotage-probe-der-test-lens-self-modification-was-tun","wie-entferne-ich-einen-worktree-unter-windows-sauber-und-was-ist-mit-nodemodules","wie-fahre-ich-einen-probe-lauf-und-warte-auf-sein-ergebnis","wie-räume-ich-scratch-auf-wenn-befehle-blockiert-werden","wie-verifiziere-ich-im-browser","windows-und-git-bash-was-geht-beim-skripten-verloren"],
+    "docs/agent-harness.md": ["","3a-langfassung-der-harten-regeln-ausgelagert-aus-agentsmd","4-die-sichere-autonomie-schleife"],
+    "docs/harness-glossar.md": [""],
+    "docs/model-routing.md": ["","1-phasen-matrix","messen","phasen-schnitt-vertrag-ab-regel-messrezept","umsetzer-kontext"],
+    "docs/referenz/anlaufstellen.md": [""],
+    "docs/referenz/befehle.md": [""],
+    "docs/referenz/repo-landkarte.md": [""],
+    "docs/sicherheit-agenten.md": [""],
+    "docs/ticket-reihenfolge.md": ["","am-ticket-ende","langfuse-befunde-gesammelt","sammelticket-mechanik","wiederaufnahme-verwaister-claims"]
+  }
 }

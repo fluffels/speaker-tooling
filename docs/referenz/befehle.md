@@ -1,5 +1,7 @@
 # Befehle
 
+Kern: [docs/referenz/befehle.md](https://github.com/fluffels/self-improving-agent-harness-and-factory/blob/v0.9.0/docs/referenz/befehle.md)
+
 > On-demand-Referenz: jedes Skript aus `package.json` mit einem Halbsatz, wofür es da ist. Wann ein Gate grün sein muss, steht nur in [AGENTS.md](../../AGENTS.md). Diese Datei ist ein `CORE_DOCS`-Eintrag von `check:docdrift`: Fehlt hier ein Skript, wird das Gate rot.
 
 ## Erste Minute
