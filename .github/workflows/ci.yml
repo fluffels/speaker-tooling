@@ -60,12 +60,16 @@ jobs:
       - name: Verify, alle Gates in einer Kette
         run: npm run verify
 
+      # Projekt-Abweichung (#5): das Produkt ist Java, das Java-Profil der Fabrik fehlt, die Gates messen nur TS-Coverage; ohne Vitest-Tests unter test/ gibt es nichts zu messen (der Testlauf in verify bleibt ebenso ohne
+      # Fehlschlag, solange es keine gibt); mit der ersten Testdatei greifen beide Gates ohne weiteres Zutun.
       - name: Coverage-Gate
+        if: ${{ hashFiles('test/**/*.test.ts') != '' }}
         run: npm run test:coverage
 
       # Misst nur die im Slice geänderten Zeilen (coverage/lcov.info aus dem Lauf davor, geschnitten mit dem Diff), darum NACH
       # test:coverage; FACTORY_DIFF_BASE kommt aus „Diff-Basis bestimmen“ oben.
       - name: Diff-Coverage-Gate
+        if: ${{ hashFiles('test/**/*.test.ts') != '' }}
         run: npm run check:diffcoverage
 
       - name: Review- und Plan-Nachweis prüfen
