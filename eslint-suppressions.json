@@ -11,10 +11,7 @@
   },
   "scripts/besitz-lib.mjs": {
     "complexity": {
-      "count": 5
-    },
-    "max-depth": {
-      "count": 1
+      "count": 3
     }
   },
   "scripts/board-lib.mjs": {
@@ -22,21 +19,13 @@
       "count": 1
     }
   },
-  "scripts/board-place.mjs": {
+  "scripts/board-takt.mjs": {
     "complexity": {
       "count": 1
     }
   },
-  "scripts/board-takt.mjs": {
-    "complexity": {
-      "count": 2
-    }
-  },
   "scripts/brain-metrics.mjs": {
     "complexity": {
-      "count": 2
-    },
-    "max-depth": {
       "count": 1
     }
   },
@@ -47,7 +36,7 @@
   },
   "scripts/check-diffcoverage.mjs": {
     "complexity": {
-      "count": 3
+      "count": 2
     }
   },
   "scripts/check-diffsize.mjs": {
@@ -180,7 +169,7 @@
   },
   "scripts/langfuse-nachliefern.mjs": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "scripts/langfuse-otlp.mjs": {
@@ -224,9 +213,6 @@
   "scripts/patch-zugriff.mjs": {
     "complexity": {
       "count": 1
-    },
-    "max-depth": {
-      "count": 5
     }
   },
   "scripts/pr-warten.mjs": {
@@ -244,19 +230,9 @@
       "count": 2
     }
   },
-  "scripts/sammelticket-anlegen.mjs": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "scripts/sandbox-doctor.mjs": {
     "complexity": {
       "count": 2
-    }
-  },
-  "scripts/schichten-kern.cjs": {
-    "complexity": {
-      "count": 1
     }
   },
   "scripts/skills-sync.mjs": {
@@ -322,73 +298,6 @@
   "scripts/worktree-guard-powershell.mjs": {
     "complexity": {
       "count": 1
-    }
-  },
-  "test/any-suppressions.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 5
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 5
-    }
-  },
-  "test/context-size.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 3
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 3
-    }
-  },
-  "test/docdrift.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 9
-    },
-    "@typescript-eslint/no-unsafe-call": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 13
-    }
-  },
-  "test/doctickets.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 4
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 4
-    }
-  },
-  "test/festgefahren.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 4
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 4
-    }
-  },
-  "test/filesize.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 4
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 4
-    }
-  },
-  "test/harness/stop-verify-hook.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 2
-    }
-  },
-  "test/lockfile.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 7
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 3
     }
   }
 }
