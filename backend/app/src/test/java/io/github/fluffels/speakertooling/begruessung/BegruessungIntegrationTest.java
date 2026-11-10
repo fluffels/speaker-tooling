@@ -34,7 +34,7 @@ class BegruessungIntegrationTest {
 	void liefertDenTextAusDerMigration() throws Exception {
 		var response = get();
 		assertThat(response.statusCode()).isEqualTo(200);
-		assertThat(response.body()).isEqualTo("{\"text\":\"Hallo Speaker-Tooling\"}");
+		assertThat(response.body()).isEqualTo("{\"text\":\"Falsch\"}");
 	}
 
 	@Test
