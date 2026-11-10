@@ -1,6 +1,7 @@
 package io.github.fluffels.speakertooling.begruessung;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 @Import(PostgresTestcontainer.class)
@@ -25,8 +27,11 @@ class BegruessungIntegrationTest {
 	@Autowired
 	JdbcClient jdbc;
 
+	@Autowired
+	com.zaxxer.hikari.HikariDataSource dataSource;
+
 	private HttpResponse<String> get() throws Exception {
-		var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/begruessung")).build();
+		var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/begruessung")).timeout(java.time.Duration.ofSeconds(30)).build();
 		return HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
 	}
 
@@ -35,6 +40,17 @@ class BegruessungIntegrationTest {
 		var response = get();
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).isEqualTo("{\"text\":\"Hallo Speaker-Tooling\"}");
+	}
+
+	@Test
+	void verbindungsTimeoutStandardIstDreiSekunden() {
+		assertThat(dataSource.getConnectionTimeout()).isEqualTo(3000);
+	}
+
+	@Test
+	void tabelleLaesstNurEineZeileZu() {
+		assertThatThrownBy(() -> jdbc.sql("insert into app.begruessung (id, text) values (2, 'zweite Zeile')").update())
+			.isInstanceOf(DataIntegrityViolationException.class);
 	}
 
 	@Test

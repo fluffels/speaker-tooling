@@ -18,7 +18,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 /** Negativfall: Die Datenbank fällt im laufenden Betrieb aus. */
 @Import(PostgresTestcontainer.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DirtiesContext
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class DatenbankAusfallIntegrationTest {
 
 	@LocalServerPort
@@ -28,7 +28,7 @@ class DatenbankAusfallIntegrationTest {
 	PostgreSQLContainer container;
 
 	private HttpResponse<String> get(String pfad) throws Exception {
-		var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + pfad)).build();
+		var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + pfad)).timeout(java.time.Duration.ofSeconds(30)).build();
 		return HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
 	}
 
@@ -49,7 +49,10 @@ class DatenbankAusfallIntegrationTest {
 	void begruessungBeiToterDatenbankLiefertFehlerOhneStacktrace() throws Exception {
 		container.stop();
 
+		var start = System.nanoTime();
 		var response = get("/api/begruessung");
+		// Standard connection-timeout 3 s (DB_CONNECTION_TIMEOUT_MS): ein Fehler kommt schnell, kein langes Hängen.
+		assertThat(java.time.Duration.ofNanos(System.nanoTime() - start)).isLessThan(java.time.Duration.ofSeconds(10));
 		assertThat(response.statusCode()).isBetween(500, 599);
 		assertThat(response.body()).doesNotContain("trace").doesNotContain("Exception").doesNotContain("\"message\"");
 	}

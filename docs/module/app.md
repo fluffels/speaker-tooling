@@ -42,3 +42,9 @@ docker compose stop db          # danach: GET /actuator/health liefert 503 {"sta
 ## Tests
 
 `./mvnw verify` im Ordner `backend` (JaCoCo-Bericht unter `backend/app/target/site/jacoco`). Integrationstests mit Testcontainers (`*IntegrationTest`, Surefire) decken den Lesepfad und den Datenbank-Ausfall ab; sie brauchen eine laufende Docker-Engine. Gezielt: `node scripts/gate-befehl.mjs testGezielt <java-datei>`.
+
+Befehle in `.factory/projekt.json`: `befehle.coverage` ruft `node tools/mvn.mjs -B verify` (Maven Wrapper in `backend`), `befehle.testGezielt` ruft `node tools/test-gezielt.mjs` und nimmt nur repo-relative Pfade `backend/<modul>/src/{main,test}/java/…`; ein Muster ohne Treffer bleibt grün, das volle `./mvnw verify` fängt das.
+
+## Offen
+
+Flyway läuft heute einmal global (Schema `app`, eine Versionsfolge). Ob jedes Fachmodul eine eigene Flyway-Instanz mit eigenem Schema bekommt (ADR 0002), entscheidet das erste Fachmodul; ebenso die ArchUnit-Schichtregeln je Modul.
