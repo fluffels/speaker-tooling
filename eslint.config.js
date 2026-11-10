@@ -11,7 +11,8 @@ export default tseslint.config(
   // Worktrees paralleler Tickets sind vollständige Checkouts und gehören nicht in den Lauf des Hauptordners.
   {
     // `**/target/`: Maven-Ausgaben des Backends (u. a. JaCoCo-HTML mit eigenen JS-Dateien).
-    ignores: ["dist/", ".claude/worktrees/", "**/target/"],
+    // `frontend/`: eigene Werkzeuge (Angular-CLI); die Root-Regeln gelten den Harness-Skripten. Angular-ESLint mit Modulgrenzen kommt mit dem ersten Fachmodul.
+    ignores: ["dist/", ".claude/worktrees/", "**/target/", "frontend/"],
   },
 
   // Regex-Falle: eine leere Alternative (`/a|/`, `(a|)`) matcht überall und ist fast immer ein Tippfehler.
