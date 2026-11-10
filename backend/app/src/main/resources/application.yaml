@@ -5,6 +5,11 @@ spring:
   flyway:
     schemas: app
     locations: classpath:db/migration/app
+  web:
+    error:
+      # Boot 4: die Fehlerseiten-Properties heißen spring.web.error.* (server.error.* wirkt hier nicht).
+      include-stacktrace: never
+      include-message: never
   datasource:
     hikari:
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:3000}
@@ -16,6 +21,3 @@ management:
       probes:
         enabled: false
 
-server:
-  error:
-    include-stacktrace: never

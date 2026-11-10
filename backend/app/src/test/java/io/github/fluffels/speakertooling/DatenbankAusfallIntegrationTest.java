@@ -51,7 +51,7 @@ class DatenbankAusfallIntegrationTest {
 
 		var response = get("/api/begruessung");
 		assertThat(response.statusCode()).isBetween(500, 599);
-		assertThat(response.body()).doesNotContain("trace").doesNotContain("Exception");
+		assertThat(response.body()).doesNotContain("trace").doesNotContain("Exception").doesNotContain("\"message\"");
 	}
 
 }
