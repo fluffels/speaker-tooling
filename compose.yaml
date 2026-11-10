@@ -1,0 +1,32 @@
+# Lokaler Betrieb: Datenbank und Backend. Konfiguration nur über Umgebungsvariablen (Vorlage: .env.example, kopieren nach .env).
+# POSTGRES_PASSWORD hat bewusst keinen Default: fehlt sie, bricht `docker compose up` mit einer Meldung ab.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-speakertooling}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt (.env.example nach .env kopieren und ein Passwort eintragen)}
+      POSTGRES_DB: ${POSTGRES_DB:-speakertooling}
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - db-daten:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-speakertooling} -d ${POSTGRES_DB:-speakertooling}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-speakertooling}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-speakertooling}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt (.env.example nach .env kopieren und ein Passwort eintragen)}
+      DB_CONNECTION_TIMEOUT_MS: ${DB_CONNECTION_TIMEOUT_MS:-3000}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+volumes:
+  db-daten:

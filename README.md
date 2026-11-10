@@ -14,7 +14,17 @@ Ein modulares Werkzeug für Speakerinnen und Autorinnen: Konferenzen und Call fo
 
 ## Stand
 
-Das Repo ist frisch angelegt. Der Harness (Agenten-Regeln, Gates, Ticket-Ablauf) kommt aus der [Self-Improving Agent Harness and Factory](https://github.com/fluffels/self-improving-agent-harness-and-factory); Regeln für Agenten stehen in [AGENTS.md](AGENTS.md). Als Nächstes entsteht ein Walking Skeleton (Spring Boot, Angular, PostgreSQL per Docker Compose).
+Das Repo ist frisch angelegt. Der Harness (Agenten-Regeln, Gates, Ticket-Ablauf) kommt aus der [Self-Improving Agent Harness and Factory](https://github.com/fluffels/self-improving-agent-harness-and-factory); Regeln für Agenten stehen in [AGENTS.md](AGENTS.md). Das Walking Skeleton wächst: das Backend (Spring Boot, PostgreSQL) läuft, das Frontend (Angular) folgt.
+
+### Lokal starten
+
+```bash
+cp .env.example .env        # POSTGRES_PASSWORD eintragen (Pflicht), übrige Werte haben Defaults
+docker compose up --build   # Datenbank und Backend
+curl http://127.0.0.1:8080/api/begruessung
+```
+
+Das Backend liefert den Text aus der Datenbank (`{"text": …}`); `GET /actuator/health` meldet 503 `DOWN`, wenn die Datenbank fehlt. Tests: `./mvnw verify` im Ordner `backend` (braucht Docker für Testcontainers). Details: [docs/module/app.md](docs/module/app.md).
 
 ## Lizenz
 
