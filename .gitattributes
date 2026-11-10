@@ -30,3 +30,6 @@
 .agents/**/*.jpg binary
 .agents/**/*.gif binary
 .agents/**/*.webp binary
+
+# Windows-Batch-Dateien (mvnw.cmd) brauchen CRLF, sonst laufen sie unter cmd.exe nicht.
+*.cmd text eol=crlf

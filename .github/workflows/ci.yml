@@ -60,8 +60,8 @@ jobs:
       - name: Verify, alle Gates in einer Kette
         run: npm run verify
 
-      # Projekt-Abweichung (#5): das Produkt ist Java, das Java-Profil der Fabrik fehlt, die Gates messen nur TS-Coverage; ohne Vitest-Tests unter test/ gibt es nichts zu messen (der Testlauf in verify bleibt ebenso ohne
-      # Fehlschlag, solange es keine gibt); mit der ersten Testdatei greifen beide Gates ohne weiteres Zutun.
+      # Projekt-Abweichung: das Produkt ist Java und wird in der Produkt-CI (produkt-ci.yml) gebaut und getestet; dieser Job misst nur TS-Coverage. Ohne Vitest-Tests unter test/ gibt es nichts zu messen
+      # (der Testlauf in verify bleibt ebenso ohne Fehlschlag, solange es keine gibt); mit der ersten Testdatei greifen beide Gates. Java-Diff-Coverage ist noch nicht verdrahtet.
       - name: Coverage-Gate
         if: ${{ hashFiles('test/**/*.test.ts') != '' }}
         run: npm run test:coverage

@@ -10,7 +10,8 @@ import regexp from "eslint-plugin-regexp";
 export default tseslint.config(
   // Worktrees paralleler Tickets sind vollständige Checkouts und gehören nicht in den Lauf des Hauptordners.
   {
-    ignores: ["dist/", ".claude/worktrees/"],
+    // `**/target/`: Maven-Ausgaben des Backends (u. a. JaCoCo-HTML mit eigenen JS-Dateien).
+    ignores: ["dist/", ".claude/worktrees/", "**/target/"],
   },
 
   // Regex-Falle: eine leere Alternative (`/a|/`, `(a|)`) matcht überall und ist fast immer ein Tippfehler.
