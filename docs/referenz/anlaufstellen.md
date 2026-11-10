@@ -12,6 +12,12 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 | [README.md](../../README.md) | um Zweck, Module und Stand des Produkts zu verstehen |
 | [Befehle](befehle.md) | wenn du ein Skript aus `package.json` nachschlägst |
 
+## Module (Tiefendoku)
+
+| Seite | Wann lesen |
+|---|---|
+| [Modul app](../module/app.md) | bevor du am Backend arbeitest: Deployable, Datenbankschema `app`, Betrieb mit `docker compose`, Tests mit `./mvnw verify`, Boot-4-Fallen |
+
 ## Entscheidungen (ADRs, historisch)
 
 | Seite | Wann lesen |
