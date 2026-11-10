@@ -1,0 +1,21 @@
+# Konfiguration nur über Umgebungsvariablen (SPRING_DATASOURCE_URL, _USERNAME, _PASSWORD); hier stehen keine Zugangsdaten.
+spring:
+  application:
+    name: speaker-tooling
+  flyway:
+    schemas: app
+    locations: classpath:db/migration/app
+  datasource:
+    hikari:
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:3000}
+
+management:
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: false
+
+server:
+  error:
+    include-stacktrace: never
