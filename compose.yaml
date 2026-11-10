@@ -1,4 +1,4 @@
-# Lokaler Betrieb: Datenbank und Backend. Konfiguration nur über Umgebungsvariablen (Vorlage: .env.example, kopieren nach .env).
+# Lokaler Betrieb: Datenbank, Backend und Frontend. Konfiguration nur über Umgebungsvariablen (Vorlage: .env.example, kopieren nach .env).
 # POSTGRES_PASSWORD hat bewusst keinen Default: fehlt sie, bricht `docker compose up` mit einer Meldung ab.
 services:
   db:
@@ -28,5 +28,11 @@ services:
       DB_CONNECTION_TIMEOUT_MS: ${DB_CONNECTION_TIMEOUT_MS:-3000}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8081}:8080"
 volumes:
   db-daten:

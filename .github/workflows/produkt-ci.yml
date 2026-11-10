@@ -1,4 +1,5 @@
-# Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests).
+# Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests)
+# und das Angular-Frontend (ng build, ng test).
 # Läuft auf jedem PR ohne Pfadfilter; noch kein Required Check (macht ein späteres Ticket). Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -37,3 +38,32 @@ jobs:
       - name: Backend bauen und testen
         working-directory: backend
         run: ./mvnw -B verify
+
+  frontend:
+    name: Frontend (ng build, ng test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Frontend bauen
+        run: npx ng build
+
+      - name: Frontend testen
+        run: npx ng test --watch=false
