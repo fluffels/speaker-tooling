@@ -70,4 +70,31 @@ describe('Begruessung', () => {
     const alert = (fixture.nativeElement as HTMLElement).querySelector('[role="alert"]');
     expect(alert?.textContent).toContain('Backend nicht erreichbar');
   });
+
+  it('zeigt bei text: null den Fehlertext', async () => {
+    const fixture = TestBed.createComponent(Begruessung);
+    fixture.detectChanges();
+    http.expectOne('/api/begruessung').flush({ text: null });
+    await fixture.whenStable();
+    const alert = (fixture.nativeElement as HTMLElement).querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Backend nicht erreichbar');
+  });
+
+  it('zeigt bei nicht-textuellem text (Zahl) den Fehlertext', async () => {
+    const fixture = TestBed.createComponent(Begruessung);
+    fixture.detectChanges();
+    http.expectOne('/api/begruessung').flush({ text: 42 });
+    await fixture.whenStable();
+    const alert = (fixture.nativeElement as HTMLElement).querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Backend nicht erreichbar');
+  });
+
+  it('zeigt bei leerem text den Fehlertext statt einer leeren Zeile', async () => {
+    const fixture = TestBed.createComponent(Begruessung);
+    fixture.detectChanges();
+    http.expectOne('/api/begruessung').flush({ text: '' });
+    await fixture.whenStable();
+    const alert = (fixture.nativeElement as HTMLElement).querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Backend nicht erreichbar');
+  });
 });

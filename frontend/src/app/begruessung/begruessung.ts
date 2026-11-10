@@ -29,7 +29,7 @@ export class Begruessung {
     this.http.get<{ text?: unknown }>('/api/begruessung').subscribe({
       next: (antwort) => {
         const text = antwort?.text;
-        this.zustand.set(typeof text === 'string' ? { art: 'text', text } : { art: 'fehler' });
+        this.zustand.set(typeof text === 'string' && text !== '' ? { art: 'text', text } : { art: 'fehler' });
       },
       error: () => this.zustand.set({ art: 'fehler' }),
     });

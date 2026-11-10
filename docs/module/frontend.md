@@ -40,6 +40,6 @@ Entwickeln: `npm ci` und `npx ng serve` im Ordner `frontend` (mit laufendem Back
 
 ## Offen
 
-- Angular-ESLint kommt mit dem ersten Fachmodul; das Root-ESLint ignoriert `frontend/`.
+- Angular-ESLint kommt mit dem ersten Fachmodul; das Root-ESLint ignoriert `frontend/`, daher greift `check:anysuppress` dort erst damit.
 - Browser-E2E (Playwright) in der CI.
 - Frontend-lcov für die Diff-Coverage (#17).
