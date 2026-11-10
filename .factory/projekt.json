@@ -61,11 +61,17 @@
     "abschluss": "brain-input"
   },
   "struktur": {
-    "quelle": "backend",
+    "quelle": ["backend/*/src/main/java"],
     "endungen": [".java"],
-    "ohne": ["**/src/test/**", "**/target/**"],
     "docmapEinheit": "ordner",
     "moduldoku": "docs/module"
+  },
+  "coverage": {
+    "berichte": [{ "format": "jacoco", "pfad": "backend/*/target/site/jacoco/jacoco.xml" }]
+  },
+  "befehle": {
+    "coverage": "node tools/mvn.mjs -B verify",
+    "testGezielt": "node tools/test-gezielt.mjs"
   },
   "bereiche": {
     "aliase": {}
