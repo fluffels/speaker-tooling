@@ -17,6 +17,7 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 | Seite | Wann lesen |
 |---|---|
 | [Modul app](../module/app.md) | bevor du am Backend arbeitest: Deployable, Datenbankschema `app`, Betrieb mit `docker compose`, Tests mit `./mvnw verify`, Boot-4-Fallen |
+| [Modul frontend](../module/frontend.md) | bevor du an der Angular-App arbeitest: Zustände, nginx-Proxy auf das Backend, Betrieb mit `docker compose`, Tests mit `ng test` |
 
 ## Entscheidungen (ADRs, historisch)
 

@@ -1,4 +1,4 @@
-# Mehrstufig: Build mit Node (Version wie .nvmrc), danach statische Auslieferung durch nginx ohne root.
+# Mehrstufig: Build mit Node (Node-Major wie .nvmrc, Angular 22 verlangt ^22.22.3), danach statische Auslieferung durch nginx ohne root.
 FROM node:22-alpine AS build
 WORKDIR /build
 COPY package.json package-lock.json ./

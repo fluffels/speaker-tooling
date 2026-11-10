@@ -33,7 +33,7 @@ Fehlerseiten und Health geben nichts preis: `spring.web.error.include-stacktrace
 
 ```bash
 cp .env.example .env            # POSTGRES_PASSWORD eintragen
-docker compose up --build       # Datenbank und Backend
+docker compose up --build       # Datenbank, Backend und Frontend (Port 8081, siehe frontend.md)
 curl http://127.0.0.1:8080/api/begruessung
 docker compose exec db psql -U speakertooling -d speakertooling -c "update app.begruessung set text = 'Neu' where id = 1"
 docker compose stop db          # danach: GET /actuator/health liefert 503 {"status":"DOWN"}

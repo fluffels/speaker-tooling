@@ -61,4 +61,13 @@ describe('Begruessung', () => {
     const alert = (fixture.nativeElement as HTMLElement).querySelector('[role="alert"]');
     expect(alert?.textContent).toContain('Backend nicht erreichbar');
   });
+
+  it('zeigt bei leerer Antwort (null) den Fehlertext', async () => {
+    const fixture = TestBed.createComponent(Begruessung);
+    fixture.detectChanges();
+    http.expectOne('/api/begruessung').flush(null);
+    await fixture.whenStable();
+    const alert = (fixture.nativeElement as HTMLElement).querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Backend nicht erreichbar');
+  });
 });
