@@ -29,7 +29,7 @@ describe('Begruessung', () => {
     http.expectOne({ method: 'GET', url: '/api/begruessung' }).flush({ text: 'Hallo aus der DB' });
     await fixture.whenStable();
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('Falscher Erwartungstext');
+    expect(text).toContain('Hallo aus der DB');
     expect(text).not.toContain('Backend nicht erreichbar');
   });
 
