@@ -119,7 +119,8 @@ jobs:
       - name: Maven-Abhängigkeitsbaum an den Dependency-Graph senden
         uses: advanced-security/maven-dependency-submission-action@a64327a7329c9939cf675e458452febe1894a70c # v6.0.1
         with:
-          directory: backend
+          # Absolut: die Action führt mvnw mit cwd=directory aus, ein relativer Pfad würde als backend/backend/mvnw gesucht.
+          directory: ${{ github.workspace }}/backend
 
       - name: Dependency Review (nur Pull Requests)
         if: github.event_name == 'pull_request'
