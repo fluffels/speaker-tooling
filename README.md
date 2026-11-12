@@ -25,6 +25,8 @@ curl http://127.0.0.1:8080/api/begruessung
 # Startseite im Browser: http://127.0.0.1:8081
 ```
 
+Datenbank sichern und zurückspielen: `bash betrieb/backup.sh`, `bash betrieb/restore.sh <datei>` ([docs/betrieb.md](docs/betrieb.md)).
+
 Das Backend liefert den Text aus der Datenbank (`{"text": …}`); `GET /actuator/health` meldet 503 `DOWN`, wenn die Datenbank fehlt. Tests: `./mvnw verify` im Ordner `backend` (braucht Docker für Testcontainers). Frontend-Tests: `npx ng test --watch=false` im Ordner `frontend`. Details: [docs/module/app.md](docs/module/app.md), [docs/module/frontend.md](docs/module/frontend.md).
 
 ## Lizenz

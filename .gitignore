@@ -31,3 +31,6 @@ Thumbs.db
 
 # Java/Maven-Build-Ausgaben, nie ins Repo.
 target/
+
+# Datenbank-Sicherungen (betrieb/backup.sh): Klartext-SQL, künftig mit personenbezogenen Daten, nie versionieren.
+backups/

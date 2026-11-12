@@ -17,6 +17,7 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 | Seite | Wann lesen |
 |---|---|
 | [Modul app](../module/app.md) | bevor du am Backend arbeitest: Deployable, Datenbankschema `app`, Betrieb mit `docker compose`, Tests mit `./mvnw verify`, Boot-4-Fallen |
+| [Betrieb](../betrieb.md) | bevor du die Datenbank sicherst oder zurückspielst: `betrieb/backup.sh`, `betrieb/restore.sh`, leere Datenbank herstellen, Probe-Restore |
 | [Modul frontend](../module/frontend.md) | bevor du an der Angular-App arbeitest: Zustände, nginx-Proxy auf das Backend, Betrieb mit `docker compose`, Tests mit `ng test` |
 
 ## Entscheidungen (ADRs, historisch)
@@ -32,6 +33,7 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 |---|---|
 | [2026-11-04 Repo anlegen](../journal/2026-11-04-repo-anlegen.md) | um zu verstehen, warum ein frisch synchronisiertes Repo `verify` nicht besteht |
 | [2026-11-12 Produkt-CI als Required Check](../journal/2026-11-12-produkt-ci-required-check.md) | um zu verstehen, wie der Merge-Block durch Backend- und Frontend-Tests belegt wurde |
+| [2026-11-12 Backup und Restore](../journal/2026-11-12-backup-restore.md) | um zu verstehen, wie Sicherung und Wiederherstellung der Datenbank gebaut und belegt wurden und was noch offen ist |
 | [2026-11-12 Lieferkette des Produkts](../journal/2026-11-12-lieferkette-produkt.md) | um zu verstehen, wie Dependabot, CodeQL (Java) und Frontend-Audit das Produkt bewachen und belegt wurden |
 
 ## Von der Fabrik übernommen
