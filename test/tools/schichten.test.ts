@@ -63,6 +63,8 @@ describe("Schicht-Definition scripts/layers.cjs", () => {
     expect(layerOf("frontend/src/app/begruessung/begruessung.ts")).toBe(LAYERS.DOMAIN);
     expect(layerOf(`${JAVA}begruessung/SpeakerToolingApplication.java`)).toBe(LAYERS.DOMAIN);
     expect(layerOf(`${JAVA}SpeakerToolingApplicationTest.java`)).toBe(LAYERS.DOMAIN);
+    expect(layerOf(`${JAVA}SpeakerToolingApplication/Innen.java`)).toBe(LAYERS.DOMAIN);
+    expect(layerOf("frontend/src/app/SpeakerToolingApplication/innen.ts")).toBe(LAYERS.DOMAIN);
   });
 
   it("liefert für jede reale Quelldatei eine bekannte Schicht", () => {

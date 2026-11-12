@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BACKEND, mvnStarten } from "../../tools/mvn.mjs";
 
 type SpawnErgebnis = { status: number | null; error?: Error };
@@ -12,6 +14,14 @@ function attrappe(ergebnis: SpawnErgebnis) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("mvnStarten", () => {
+  it("nutzt die echte Plattform und den Ordner backend der Repo-Wurzel, wenn nichts injiziert wird", () => {
+    expect(BACKEND).toBe(resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "backend"));
+    const spawn = attrappe({ status: 0 });
+    expect(mvnStarten(["-v"], { spawn })).toBe(0);
+    const windows = process.platform === "win32";
+    expect(spawn).toHaveBeenCalledWith(windows ? "mvnw.cmd" : "./mvnw", ["-v"], { cwd: join(BACKEND), stdio: "inherit", shell: windows });
+  });
+
   it("startet unter Linux ./mvnw im Backend-Ordner ohne Shell und gibt den Status zurück", () => {
     const spawn = attrappe({ status: 3 });
     expect(mvnStarten(["-B", "verify"], { spawn, plattform: "linux" })).toBe(3);

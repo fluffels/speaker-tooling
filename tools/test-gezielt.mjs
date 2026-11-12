@@ -5,7 +5,7 @@
 // Pfade: repo-relativ, mit `./`, absolut oder mit Backslashes; sie werden gegen die Repo-Wurzel (nicht das cwd) normalisiert.
 // Andere Pfade (auch außerhalb der Wurzel): Exit 2 mit Meldung. Grenze: ein Muster ohne Treffer bleibt grün (`-Dsurefire.failIfNoSpecifiedTests=false`); das volle `./mvnw verify` fängt das.
 // Verteilung nach Pfad: `LAEUFER` ordnet ein Präfix einem Läufer zu, heute nur `backend/` → Maven. `frontend/` → Vitest/Angular wäre der nächste Eintrag der Tabelle, ist bewusst nicht aktiv (außerhalb von `backend/` gilt weiter Exit 2).
-import { posix, relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mvnStarten } from "./mvn.mjs";
 
@@ -16,7 +16,7 @@ const MAIN = /^backend\/([^/]+)\/src\/main\/java\/(.+)\/[^/]+\.java$/;
 /** Pur: ein Pfad (relativ, `./`, absolut, Backslashes) → POSIX-Pfad relativ zur Repo-Wurzel; `null` für die Wurzel selbst oder einen Pfad außerhalb. */
 export function repoRelativ(roh, wurzel = WURZEL) {
   const rel = relative(wurzel, resolve(wurzel, roh.replaceAll("\\", "/"))).split(sep).join("/");
-  if (rel === "" || rel === ".." || rel.startsWith("../") || posix.isAbsolute(rel)) return null;
+  if (rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) return null; // isAbsolute: unter Windows liefert relative() bei anderem Laufwerk einen absoluten Pfad
   return rel;
 }
 
@@ -47,8 +47,7 @@ const LAEUFER = [{ praefix: "backend/", argumente: mavenArgumente }];
 /** Normalisiert die Pfade, wählt den Läufer und startet ihn über `starte` (Standard Maven); Exit-Code 2 bei unbrauchbaren Pfaden. */
 export function cli(argv, { wurzel = WURZEL, starte = mvnStarten } = {}) {
   const pfade = argv.map((roh) => repoRelativ(roh, wurzel));
-  const gueltig = pfade.length > 0 && pfade.every((p) => p !== null);
-  const laeufer = gueltig ? LAEUFER.find((l) => pfade.every((p) => p?.startsWith(l.praefix))) : undefined;
+  const laeufer = LAEUFER.find((l) => pfade.length > 0 && pfade.every((p) => p?.startsWith(l.praefix)));
   const args = laeufer?.argumente(pfade) ?? null;
   if (args === null) {
     console.error(

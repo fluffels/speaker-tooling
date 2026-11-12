@@ -41,7 +41,7 @@ const SCHICHT_MODELL = {
   endungen: ENDUNGEN,
   schichten: [
     { id: LAYERS.ENTRY, label: "Einstieg", wurzeln: ["SpeakerToolingApplication"], nurDatei: true, darf: [LAYERS.DOMAIN] },
-    { id: LAYERS.DOMAIN, label: "Kern (Auffang: Domäne, Anwendung, Adapter)", wurzeln: [], darf: [] },
+    { id: LAYERS.DOMAIN, label: "Alles außer Einstieg (Auffang: Domäne, Anwendung, Adapter, Angular-Oberfläche)", wurzeln: [], darf: [] },
   ].map((s) => ({ ...s, muster: s.wurzeln.length ? kern.musterAus(QUELLWURZELN, s.wurzeln, s.nurDatei === true, ENDUNGEN) : null })),
   extern: [],
 };

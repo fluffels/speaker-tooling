@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { cli, mavenArgumente, repoRelativ } from "../../tools/test-gezielt.mjs";
 
 const WURZEL = resolve("/repo/wurzel");
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAIN = "backend/app/src/main/java/io/github/fluffels/speakertooling/begruessung/BegruessungLeser.java";
 const TEST = "backend/app/src/test/java/io/github/fluffels/speakertooling/begruessung/BegruessungIntegrationTest.java";
 const PAKET = "io/github/fluffels/speakertooling/begruessung";
@@ -38,6 +42,11 @@ describe("repoRelativ", () => {
     expect(repoRelativ("..", WURZEL)).toBeNull();
   });
 
+  it("nimmt ohne zweites Argument die echte Repo-Wurzel (nicht das cwd) als Bezug", () => {
+    expect(repoRelativ(join(REPO, MAIN))).toBe(MAIN);
+    expect(repoRelativ(MAIN)).toBe(MAIN);
+  });
+
   it("lehnt die Wurzel selbst und den leeren Pfad ab", () => {
     expect(repoRelativ("", WURZEL)).toBeNull();
     expect(repoRelativ(WURZEL, WURZEL)).toBeNull();
@@ -63,6 +72,16 @@ describe("mavenArgumente", () => {
     expect(mavenArgumente(["frontend/src/app/app.ts"])).toBeNull();
     expect(mavenArgumente([MAIN, "README.md"])).toBeNull();
     expect(mavenArgumente([])).toBeNull();
+  });
+});
+
+describe("Aufruf als Skript", () => {
+  it("normalisiert gegen die Repo-Wurzel auch aus fremdem cwd und endet bei einem Frontend-Pfad mit Exit 2 samt Meldung", () => {
+    const pfad = join(REPO, "frontend", "src", "app", "app.ts");
+    const r = spawnSync(process.execPath, [join(REPO, "tools", "test-gezielt.mjs"), pfad], { cwd: tmpdir(), encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain(`Repo-Wurzel ${REPO}${sep};`);
+    expect(r.stderr).toContain(pfad);
   });
 });
 
