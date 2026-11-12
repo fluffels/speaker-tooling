@@ -2,7 +2,7 @@
 # und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
 # Der Job backend misst danach die Diff-Coverage des Produkts (check:diffcoverage: JaCoCo-Bericht des Backends und lcov des Frontends gegen den Diff, Schichten und Floors laut scripts/layers.cjs).
 # Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Advisory-Prüfung des Graph-Vergleichs (tools/produkt-graph.mjs); Struktur: Digest-Pins und needs.
-# Die Jobs betrieb-linux und betrieb-macos fahren den Rundlauf-Test für Backup und Restore (betrieb/test-rundlauf.sh; macOS mit /bin/bash 3.2).
+# Die Jobs betrieb-linux und betrieb-macos fahren den Rundlauf-Test für Backup und Restore (betrieb/test-rundlauf.sh; macOS mit /bin/bash 3.2), einschließlich der age-Verschlüsselung (age aus apt bzw. Homebrew).
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -235,6 +235,9 @@ jobs:
       - name: Skripte statisch prüfen
         run: shellcheck betrieb/*.sh
 
+      - name: age installieren (Verschlüsselungstest)
+        run: sudo apt-get install -y --no-install-recommends age
+
       - name: Rundlauf gegen die Compose-Datenbank
         run: |
           POSTGRES_PASSWORD="$(openssl rand -hex 16)"
@@ -258,7 +261,7 @@ jobs:
 
       - name: PostgreSQL 18 installieren
         run: |
-          brew install postgresql@18
+          brew install postgresql@18 age
           echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
 
       - name: PostgreSQL starten

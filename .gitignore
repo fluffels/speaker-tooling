@@ -32,5 +32,5 @@ Thumbs.db
 # Java/Maven-Build-Ausgaben, nie ins Repo.
 target/
 
-# Datenbank-Sicherungen (betrieb/backup.sh): Klartext-SQL, künftig mit personenbezogenen Daten, nie versionieren.
+# Datenbank-Sicherungen (betrieb/backup.sh): Klartext-SQL oder age-verschlüsselt (*.sql.age), künftig mit personenbezogenen Daten, nie versionieren; auch die Empfängerdatei backups/empfaenger.txt bleibt so lokal.
 backups/
