@@ -36,7 +36,7 @@ Entwickeln: `npm ci` und `npx ng serve` im Ordner `frontend` (mit laufendem Back
 
 ## Tests
 
-`npx ng test --watch=false` im Ordner `frontend` (Vitest, Komponententests für Anzeige, Ladezustand und Fehlerfälle). Der Workflow `Produkt-CI` fährt im Job „Frontend (ng build, ng test)“ `ng build` und `ng test` auf jedem PR.
+`npx ng test --watch=false` im Ordner `frontend` (Vitest, Komponententests für Anzeige, Ladezustand und Fehlerfälle). Der Workflow `Produkt-CI` fährt im Job „Frontend (ng build, ng test)“ `ng build` und `ng test` auf jedem PR. Der Job `Produkt-CI` hängt per `needs` von allen Produkt-Jobs ab und ist Required Check im Ruleset `main-schutz`: ein roter Frontend-Test blockiert den Merge.
 
 ## Offen
 

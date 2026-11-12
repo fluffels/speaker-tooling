@@ -41,7 +41,7 @@ docker compose stop db          # danach: GET /actuator/health liefert 503 {"sta
 
 ## Tests
 
-`./mvnw verify` im Ordner `backend` (JaCoCo-Bericht unter `backend/app/target/site/jacoco`). Integrationstests mit Testcontainers (`*IntegrationTest`, Surefire) decken den Lesepfad und den Datenbank-Ausfall ab; sie brauchen eine laufende Docker-Engine. Gezielt: `node scripts/gate-befehl.mjs testGezielt <java-datei>`.
+`./mvnw verify` im Ordner `backend` (JaCoCo-Bericht unter `backend/app/target/site/jacoco`). Integrationstests mit Testcontainers (`*IntegrationTest`, Surefire) decken den Lesepfad und den Datenbank-Ausfall ab; sie brauchen eine laufende Docker-Engine. Gezielt: `node scripts/gate-befehl.mjs testGezielt <java-datei>`. Der Job `Produkt-CI` hängt per `needs` von allen Produkt-Jobs ab und ist Required Check im Ruleset `main-schutz`: ein roter Backend-Test blockiert den Merge.
 
 Befehle in `.factory/projekt.json`: `befehle.coverage` ruft `node tools/mvn.mjs -B verify` (Maven Wrapper in `backend`), `befehle.testGezielt` ruft `node tools/test-gezielt.mjs` und nimmt nur repo-relative Pfade `backend/<modul>/src/{main,test}/java/…`; ein Muster ohne Treffer bleibt grün, das volle `./mvnw verify` fängt das.
 
