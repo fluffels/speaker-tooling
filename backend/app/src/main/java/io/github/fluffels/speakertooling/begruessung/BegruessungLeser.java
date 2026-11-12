@@ -13,6 +13,13 @@ class BegruessungLeser {
 		this.jdbc = jdbc;
 	}
 
+	int probe(int x) {
+		if (x > 1) {
+			return x * 2;
+		}
+		return x;
+	}
+
 	Begruessung lesen() {
 		return jdbc.sql("select text from app.begruessung where id = 1")
 			.query((rs, row) -> new Begruessung(rs.getString("text")))

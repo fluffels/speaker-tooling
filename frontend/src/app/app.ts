@@ -7,3 +7,10 @@ import { Begruessung } from './begruessung/begruessung';
   templateUrl: './app.html',
 })
 export class App {}
+
+export function probe(x: number): number {
+  if (x > 1) {
+    return x * 2;
+  }
+  return x;
+}
