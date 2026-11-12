@@ -260,7 +260,9 @@ pruefe_gleich "Leerer Dump verschlüsselt: Exit 1" 1 "$RC"
 pruefe_enthaelt "Leerer Dump verschlüsselt: Meldung" "Sicherung ist leer, verworfen" "$(cat "$TMP/e")"
 pruefe_gleich "Leerer Dump verschlüsselt: nichts bleibt liegen" 0 "$(dateien "$TMP/n6")"
 if DB_EXEC=false BACKUP_EMPFAENGER="$TMP/empfaenger.txt" BACKUP_DIR="$TMP/n6" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
-if [ "$RC" -ne 0 ]; then ok "Fehlschlagender pg_dump verschlüsselt: Exit ungleich 0"; else nok "Fehlschlagender pg_dump verschlüsselt: Exit war 0"; fi
+pruefe_gleich "Fehlschlagender pg_dump verschlüsselt: Exit 1" 1 "$RC"
+pruefe_enthaelt "Fehlschlagender pg_dump verschlüsselt: Meldung" "Sicherung fehlgeschlagen (pg_dump 1" "$(cat "$TMP/e")"
+case "$(cat "$TMP/e")" in *"leer"*) nok "Fehlschlagender pg_dump verschlüsselt: falsche Diagnose leer" ;; *) ok "Fehlschlagender pg_dump verschlüsselt: nicht als leer gemeldet" ;; esac
 pruefe_gleich "Fehlschlagender pg_dump verschlüsselt: nichts bleibt liegen" 0 "$(dateien "$TMP/n6")"
 
 # 5f. Restore-Negativfälle: das Ziel bleibt leer (Schema app fehlt)

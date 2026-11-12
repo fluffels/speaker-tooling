@@ -20,7 +20,7 @@ bash betrieb/restore.sh backups/<datei>
 BACKUP_SCHLUESSEL=<pfad-zur-schluesseldatei> bash betrieb/restore.sh backups/<datei>.sql.age   # verschlüsselte Sicherung
 ```
 
-`restore.sh` erkennt das Format an der ersten Zeile. Eine verschlüsselte Sicherung braucht `BACKUP_SCHLUESSEL` (Exit 1, wenn er fehlt, unlesbar oder falsch ist, oder die Datei beschädigt oder abgeschnitten ist). Sie wird vor dem Einspielen einmal vollständig entschlüsselt (Prüflauf), erst danach fließt der Klartext in `psql`; so schreibt eine abgeschnittene Datei nie einen Teil in die Datenbank. Eine passphrasegeschützte Schlüsseldatei fragt `age` deshalb zweimal. Eine Klartext-Sicherung (Altbestand) wird bei gesetztem `BACKUP_SCHLUESSEL` mit Warnung eingespielt.
+`restore.sh` erkennt das Format an der ersten Zeile. Eine verschlüsselte Sicherung braucht `BACKUP_SCHLUESSEL` (Exit 1, wenn er fehlt, unlesbar oder falsch ist, oder die Datei beschädigt oder abgeschnitten ist). Sie wird vor dem Einspielen einmal vollständig entschlüsselt (Prüflauf), erst danach fließt der Klartext in `psql`; so schreibt eine abgeschnittene Datei nie einen Teil in die Datenbank. Eine passphrasegeschützte Schlüsseldatei fragt `age` deshalb zweimal. Eine Klartext-Sicherung (Altbestand) wird bei gesetztem `BACKUP_SCHLUESSEL` mit Warnung eingespielt. Bekannte Grenze: erkannt wird nur der binäre `age`-Kopf; eine mit `age -a` armierte Datei oder eine Klartextdatei namens `*.sql.age` läuft als Klartext.
 
 Das Ziel (`DB_NAME`) muss leer sein: kein Schema außer `public` und den Systemschemata, keine Relation. Sonst bricht `restore.sh` mit Exit-Code 2 und der Meldung „Ziel-Datenbank … ist nicht leer“ ab und spielt nichts ein. Das Einspielen läuft in einer Transaktion (`psql -v ON_ERROR_STOP=1 --single-transaction`): ein Fehler lässt die Datenbank unverändert.
 
@@ -70,7 +70,7 @@ age-keygen -y ~/.config/speaker-tooling/sicherung.key > backups/empfaenger.txt  
 bash betrieb/backup.sh                             # ab jetzt *.sql.age
 ```
 
-- Ist der Schutz aktiv, **lehnt `backup.sh` eine unverschlüsselte Sicherung ab** (Exit 1, Meldung „unverschlüsselte Sicherung abgelehnt“, keine Datei): `age` fehlt, die Empfängerdatei fehlt oder ist ungültig, oder `age` schlägt fehl (der Fehler mitten im Strom meldet „Sicherung fehlgeschlagen“, Exit 1, ebenfalls ohne Datei). Es fällt nie auf Klartext zurück. Eine leer gesetzte `BACKUP_EMPFAENGER` zählt als gesetzt und lehnt ab. Wer das auch für einen frischen oder geleerten Ordner will, setzt `BACKUP_EMPFAENGER` fest (zum Beispiel in der Shell-Konfiguration).
+- Ist der Schutz aktiv, **lehnt `backup.sh` eine unverschlüsselte Sicherung ab** (Exit 1, Meldung „unverschlüsselte Sicherung abgelehnt“, keine Datei): `age` fehlt, die Empfängerdatei fehlt oder ist ungültig, oder `age` schlägt fehl (der Fehler mitten im Strom meldet „Sicherung fehlgeschlagen“, Exit 1, ebenfalls ohne Datei). Es fällt nie auf Klartext zurück. Eine leer gesetzte `BACKUP_EMPFAENGER` zählt als gesetzt: ohne Standard-Empfängerdatei lehnt `backup.sh` ab, mit ihr wird die Standarddatei benutzt. Wer das auch für einen frischen oder geleerten Ordner will, setzt `BACKUP_EMPFAENGER` fest (zum Beispiel in der Shell-Konfiguration).
 - Schlüsselablage: die private Schlüsseldatei nie in `backups/` oder im Repo, sondern im Passwortmanager und zusätzlich offline. Einen zweiten Empfänger (Notfallschlüssel) trägst du als weitere Zeile in die Empfängerdatei ein. **Geht der Schlüssel verloren, sind alle verschlüsselten Sicherungen unlesbar.**
 - `age` authentifiziert keinen Absender: wer die Empfängerdatei kennt, kann eine gültige Sicherung bauen. Es bleibt bei „nur eigene Sicherungen einspielen“.
 
@@ -88,7 +88,7 @@ find backups \( -name '*.sql' -o -name '*.sql.age' \) -mtime +30            # er
 find backups \( -name '*.sql' -o -name '*.sql.age' \) -mtime +30 -delete    # dann löschen; empfaenger.txt ist ausgenommen
 ```
 
-Vor dem `-delete` die jüngste geprüfte Sicherung ausnehmen, falls sie älter als 30 Tage ist (zum Beispiel `! -name <datei>` an den Befehl hängen); der Befehl allein kennt diese Regel nicht.
+Ist die jüngste geprüfte Sicherung älter als 30 Tage, nimm sie vor dem `-delete` aus, zum Beispiel mit `! -name <datei>` direkt vor `-delete` (`find` wertet von links nach rechts, hinter `-delete` ist es zu spät); der Befehl allein kennt diese Regel nicht.
 
 `rm` überschreibt auf SSD und APFS nicht sicher; gelöschte Reste schützt nur die Verschlüsselung.
 

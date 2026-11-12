@@ -5,7 +5,7 @@
 # BACKUP_DIR         Zielordner, Standard <Repo>/backups.
 # BACKUP_EMPFAENGER  Datei mit öffentlichen age-Schlüsseln; gesetzt macht sie den Schutz aktiv. Standard $BACKUP_DIR/empfaenger.txt.
 # Schutz aktiv: BACKUP_EMPFAENGER gesetzt, ODER die Standard-Empfängerdatei existiert, ODER in BACKUP_DIR liegt schon eine *.sql.age.
-# Ist der Schutz aktiv, lehnt das Skript ab (Exit 1, keine Datei), statt Klartext zu schreiben; auch ein leer gesetztes BACKUP_EMPFAENGER zählt als gesetzt.
+# Ist der Schutz aktiv, lehnt das Skript ab (Exit 1, keine Datei), statt Klartext zu schreiben; auch ein leer gesetztes BACKUP_EMPFAENGER zählt als gesetzt (ohne Standard-Empfängerdatei wird abgelehnt).
 set -euo pipefail
 umask 077
 
