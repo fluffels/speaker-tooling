@@ -96,6 +96,7 @@ updates:
       prefix: "chore(deps)"
 
   # Frontend: Angular-Familie samt vitest (@angular/build bindet vitest per Peer) in EINEM PR, dann die Sammelgruppe.
+  # Ein roter Angular-Major-PR ist gewollt der Anlass für `ng update` (Migrationen, passender TypeScript-Bereich).
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
@@ -148,7 +149,7 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
-  # Images in docker-compose.yml. Ein Postgres-Major macht das Datenverzeichnis inkompatibel (Migration nötig).
+  # Images in compose.yaml. Ein Postgres-Major macht das Datenverzeichnis inkompatibel (Migration nötig).
   - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:

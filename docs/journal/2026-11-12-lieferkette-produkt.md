@@ -14,4 +14,4 @@ Backend (Maven), Frontend (npm) und Docker-Images sind wie der Harness durch Dep
 
 ## Offen
 
-- Transitive Maven-Abhängigkeiten stehen nicht im Dependency-Graph, Basis-Images sind nicht per Digest gepinnt (als Befund-Issue festgehalten).
+- Transitive Maven-Abhängigkeiten stehen nicht im Dependency-Graph, Basis-Images sind nicht per Digest gepinnt (festgehalten in #24).
