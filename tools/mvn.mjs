@@ -7,9 +7,10 @@ import { fileURLToPath } from "node:url";
 
 export const BACKEND = join(dirname(fileURLToPath(import.meta.url)), "..", "backend");
 
-export function mvnStarten(args) {
-  const windows = process.platform === "win32";
-  const r = spawnSync(windows ? "mvnw.cmd" : "./mvnw", args, { cwd: BACKEND, stdio: "inherit", shell: windows });
+/** `spawn` und `plattform` sind für Tests austauschbar. */
+export function mvnStarten(args, { spawn = spawnSync, plattform = process.platform } = {}) {
+  const windows = plattform === "win32";
+  const r = spawn(windows ? "mvnw.cmd" : "./mvnw", args, { cwd: BACKEND, stdio: "inherit", shell: windows });
   if (r.error) {
     console.error(`✖ Maven Wrapper konnte nicht starten: ${r.error.message}`);
     return 1;
