@@ -38,6 +38,9 @@
     "docs:gen": "node scripts/docs-gen.mjs --write",
     "check:docgen": "node scripts/docs-gen.mjs"
   },
+  "overrides": {
+    "minimatch": "^11.0.1"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.5",
