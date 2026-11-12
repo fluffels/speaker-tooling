@@ -6,11 +6,11 @@ import { Begruessung } from './begruessung/begruessung';
   selector: 'app-root',
   templateUrl: './app.html',
 })
-export class App {
-  probe(x: number): number {
-    if (x > 1) {
-      return x * 2;
-    }
-    return x;
+export class App {}
+
+export function probe(x: number): number {
+  if (x > 1) {
+    return x * 2;
   }
+  return x;
 }
