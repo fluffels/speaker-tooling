@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Spielt eine Sicherung von backup.sh in eine LEERE Datenbank ein.
 # Aufruf: bash betrieb/restore.sh <datei>   Einstellungen: gemeinsam.sh (Ziel ist DB_NAME).
-# Exit-Codes: 1 Aufruf oder Datei, 2 Ziel-Datenbank nicht leer, sonst der Exit von psql.
+# Bekannte Grenze: erkannt wird nur der binäre age-Kopf; eine mit age -a armierte Datei oder eine Klartextdatei namens *.sql.age läuft als Klartext.
+# Exit-Codes: 1 Aufruf, Datei oder Schlüssel (auch: nicht entschlüsselbar), 2 Ziel-Datenbank nicht leer, sonst der Exit von psql.
+# BACKUP_SCHLUESSEL  Datei mit der privaten age-Identität; nötig für *.sql.age. Eine Klartext-Sicherung wird bei gesetztem
+#                    Schlüssel mit Warnung eingespielt (Altbestand).
 # Nur eigene Sicherungen einspielen: eine SQL-Datei kann psql-Metabefehle enthalten und ist ausführbarer Code.
 set -euo pipefail
 
@@ -22,6 +25,29 @@ if [ ! -s "$datei" ]; then
   exit 1
 fi
 
+# Format an der ersten Zeile erkennen. Eine verschlüsselte Sicherung wird vor dem Einspielen einmal vollständig entschlüsselt
+# (Prüflauf), damit eine abgeschnittene oder manipulierte Datei nie einen Teil in die Datenbank schreibt.
+verschluesselt=0
+erste=""
+IFS= read -r erste < "$datei" || true
+if [ "$erste" = "age-encryption.org/v1" ]; then
+  verschluesselt=1
+  if ! command -v age >/dev/null 2>&1; then
+    fehler "Sicherung ist verschlüsselt, aber age ist nicht installiert: $datei"
+    exit 1
+  fi
+  if [ -z "${BACKUP_SCHLUESSEL-}" ] || [ ! -f "$BACKUP_SCHLUESSEL" ] || [ ! -r "$BACKUP_SCHLUESSEL" ]; then
+    fehler "Sicherung ist verschlüsselt, BACKUP_SCHLUESSEL fehlt oder ist nicht lesbar (${BACKUP_SCHLUESSEL-nicht gesetzt}): $datei"
+    exit 1
+  fi
+  if ! age -d -i "$BACKUP_SCHLUESSEL" "$datei" > /dev/null 2>&1; then
+    fehler "Sicherung nicht entschlüsselbar (falscher Schlüssel oder beschädigt), nichts eingespielt: $datei"
+    exit 1
+  fi
+elif [ -n "${BACKUP_SCHLUESSEL-}" ]; then
+  fehler "WARNUNG: Sicherung ist unverschlüsselt: $datei"
+fi
+
 # Leer heißt: kein Schema außer public und den Systemschemata, und keine Relation. Der DB-Name steht nie im SQL-Text.
 # Indizes (relkind i) fehlen bewusst: sie kommen nie ohne Tabelle vor. Fremdtabellen (f) sind ungetestet (brauchen eine FDW-Erweiterung).
 sql="select nspname from pg_namespace where nspname not in ('public', 'pg_catalog', 'information_schema') and nspname not like 'pg\_%'
@@ -36,6 +62,11 @@ if [ -n "$gefunden" ]; then
   exit 2
 fi
 
-# shellcheck disable=SC2086
-$DB_EXEC psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 --single-transaction -q < "$datei" > /dev/null
+if [ "$verschluesselt" = 1 ]; then
+  # shellcheck disable=SC2086
+  age -d -i "$BACKUP_SCHLUESSEL" "$datei" | $DB_EXEC psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 --single-transaction -q > /dev/null
+else
+  # shellcheck disable=SC2086
+  $DB_EXEC psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 --single-transaction -q < "$datei" > /dev/null
+fi
 fehler "Sicherung eingespielt in $DB_NAME: $datei"

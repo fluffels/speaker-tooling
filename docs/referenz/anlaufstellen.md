@@ -17,7 +17,7 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 | Seite | Wann lesen |
 |---|---|
 | [Modul app](../module/app.md) | bevor du am Backend arbeitest: Deployable, Datenbankschema `app`, Betrieb mit `docker compose`, Tests mit `./mvnw verify`, Boot-4-Fallen |
-| [Betrieb](../betrieb.md) | bevor du die Datenbank sicherst oder zurückspielst: `betrieb/backup.sh`, `betrieb/restore.sh`, leere Datenbank herstellen, Probe-Restore |
+| [Betrieb](../betrieb.md) | bevor du die Datenbank sicherst oder zurückspielst: `betrieb/backup.sh`, `betrieb/restore.sh`, Sicherungen verschlüsseln, alte Sicherungen löschen, leere Datenbank herstellen, Probe-Restore |
 | [Modul frontend](../module/frontend.md) | bevor du an der Angular-App arbeitest: Zustände, nginx-Proxy auf das Backend, Betrieb mit `docker compose`, Tests mit `ng test` |
 
 ## Entscheidungen (ADRs, historisch)
@@ -26,6 +26,7 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 |---|---|
 | [0001 Stack](../adr/0001-stack.md) | bevor eine Technikwahl (Java, Spring, Flyway, Angular, Testwerkzeuge) neu diskutiert wird |
 | [0002 Modulschnitt](../adr/0002-modulschnitt.md) | bevor ein Modul geschnitten, ein Fremdschlüssel oder eine Kopplung zwischen Modulen gebaut wird |
+| [0003 Sicherung verschlüsseln](../adr/0003-sicherung-verschluesselung.md) | bevor das Verschlüsselungswerkzeug der Sicherungen oder die Rückfall-Regel (nie Klartext bei aktivem Schutz) geändert wird |
 
 ## Journal
 
