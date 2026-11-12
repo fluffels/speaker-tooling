@@ -55,22 +55,17 @@ jobs:
           echo "FACTORY_DIFF_BASE=$base" >> "$GITHUB_ENV"
 
       # Alle Gates laufen über EINE Kette statt einzeln dupliziert: sie steht in package.json › scripts.verify, nicht hier
-      # kopiert, damit die lokale Reihenfolge nicht von der CI driftet und kein Gate lokal vergessen wird. Coverage und
-      # Diff-Coverage sind eigene Schritte dahinter (zusammen = `npm run verify:full`), weil die Instrumentierung die Suite verlangsamt.
+      # kopiert, damit die lokale Reihenfolge nicht von der CI driftet und kein Gate lokal vergessen wird. Die Coverage ist ein
+      # eigener Schritt dahinter, weil die Instrumentierung die Suite verlangsamt; die Diff-Coverage des Produkts läuft in der Produkt-CI.
       - name: Verify, alle Gates in einer Kette
         run: npm run verify
 
-      # Projekt-Abweichung: das Produkt ist Java und Angular und wird in der Produkt-CI (produkt-ci.yml) gebaut und getestet; dieser Job misst nur TS-Coverage. Ohne Vitest-Tests unter test/ gibt es nichts zu messen
-      # (der Testlauf in verify bleibt ebenso ohne Fehlschlag, solange es keine gibt); mit der ersten Testdatei greifen beide Gates. Java-Diff-Coverage ist noch nicht verdrahtet.
+      # Projekt-Abweichung: das Produkt ist Java und Angular; Bau, Tests und die Diff-Coverage des Produkts (check:diffcoverage mit JaCoCo und Frontend-lcov) laufen in der Produkt-CI (produkt-ci.yml, Job backend).
+      # Dieser Job misst nur die Vitest-Werkzeuge (tools/, scripts/layers.cjs). Ohne Vitest-Tests unter test/ gibt es nichts zu messen
+      # (der Testlauf in verify bleibt ebenso ohne Fehlschlag, solange es keine gibt).
       - name: Coverage-Gate
         if: ${{ hashFiles('test/**/*.test.ts') != '' }}
         run: npm run test:coverage
-
-      # Misst nur die im Slice geänderten Zeilen (coverage/lcov.info aus dem Lauf davor, geschnitten mit dem Diff), darum NACH
-      # test:coverage; FACTORY_DIFF_BASE kommt aus „Diff-Basis bestimmen“ oben.
-      - name: Diff-Coverage-Gate
-        if: ${{ hashFiles('test/**/*.test.ts') != '' }}
-        run: npm run check:diffcoverage
 
       - name: Review- und Plan-Nachweis prüfen
         if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]' }}

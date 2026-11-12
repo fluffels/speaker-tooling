@@ -36,10 +36,9 @@ Entwickeln: `npm ci` und `npx ng serve` im Ordner `frontend` (mit laufendem Back
 
 ## Tests
 
-`npx ng test --watch=false` im Ordner `frontend` (Vitest, Komponententests für Anzeige, Ladezustand und Fehlerfälle). Der Workflow `Produkt-CI` fährt im Job „Frontend (ng build, ng test)“ `ng build` und `ng test` auf jedem PR. Der Job `Produkt-CI` hängt per `needs` von allen Produkt-Jobs ab und ist Required Check im Ruleset `main-schutz`: ein roter Frontend-Test blockiert den Merge. Der Job „Frontend-Audit (npm audit)“ fährt `npm audit --audit-level=high` auf `frontend/package-lock.json` (inklusive Dev-Abhängigkeiten) und macht `Produkt-CI` bei einem high-Advisory rot; Dependabot hält das Frontend über `.github/dependabot.yml` aktuell.
+`npx ng test --watch=false` im Ordner `frontend` (mit `--coverage` zusätzlich der lcov-Bericht `frontend/coverage/frontend/lcov.info` für `check:diffcoverage`; Optionen in `angular.json` › `test`, gemessen werden `src/app/**/*.ts` ohne Specs; Vitest, Komponententests für Anzeige, Ladezustand und Fehlerfälle). Der Workflow `Produkt-CI` fährt im Job „Frontend (ng build, ng test)“ `ng build` und `ng test` auf jedem PR. Der Job `Produkt-CI` hängt per `needs` von allen Produkt-Jobs ab und ist Required Check im Ruleset `main-schutz`: ein roter Frontend-Test blockiert den Merge. Der Job „Frontend-Audit (npm audit)“ fährt `npm audit --audit-level=high` auf `frontend/package-lock.json` (inklusive Dev-Abhängigkeiten) und macht `Produkt-CI` bei einem high-Advisory rot; Dependabot hält das Frontend über `.github/dependabot.yml` aktuell.
 
 ## Offen
 
 - Angular-ESLint kommt mit dem ersten Fachmodul; das Root-ESLint ignoriert `frontend/`, daher greift `check:anysuppress` dort erst damit.
 - Browser-E2E (Playwright) in der CI.
-- Frontend-lcov für die Diff-Coverage (#17).

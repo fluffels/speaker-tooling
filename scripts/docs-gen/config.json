@@ -35,6 +35,11 @@
         "command": "npm audit --audit-level=high",
         "source": ".github/workflows/ci.yml",
         "description": "Security-Gate über die Abhängigkeiten"
+      },
+      {
+        "command": "npm run check:diffcoverage",
+        "source": ".github/workflows/produkt-ci.yml",
+        "description": "Diff-Coverage des Produkts (JaCoCo und Frontend-lcov) je Schicht gegen die Floors"
       }
     ]
   },
