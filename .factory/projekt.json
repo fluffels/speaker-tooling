@@ -36,7 +36,8 @@
   "codeql": {
     "sprachen": [
       "javascript-typescript",
-      "actions"
+      "actions",
+      "java-kotlin"
     ]
   },
   "praefixe": {

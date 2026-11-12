@@ -1,5 +1,5 @@
 # Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests)
-# und das Angular-Frontend (ng build, ng test).
+# und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -68,6 +68,28 @@ jobs:
       - name: Frontend testen
         run: npx ng test --watch=false
 
+  frontend-audit:
+    # Eigener Name, nie "Security-Audit (npm audit)": das ist der Required Check aus ci.yml (Root-Lockfile).
+    name: Frontend-Audit (npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Lockfile auditieren (high, inklusive Dev-Abhängigkeiten)
+        run: npm audit --audit-level=high
+
   produkt-ci:
     # Required Check im Ruleset main-schutz (#9): grün nur, wenn jeder Job in needs success meldet.
     # Neuer Produkt-Job: hier in needs eintragen, sonst blockiert er den Merge nicht.
@@ -75,6 +97,7 @@ jobs:
     needs:
       - backend
       - frontend
+      - frontend-audit
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
