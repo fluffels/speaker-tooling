@@ -170,7 +170,8 @@ jobs:
         # Der Graph verarbeitet den Snapshot asynchron. Fertig heißt: der Warn-Header x-github-dependency-graph-snapshot-warnings ist leer
         # (gleich viele Snapshots an Basis und Kopf) oder der Vergleich enthält schon einen pom.xml-Eintrag (Basis ohne Snapshot, etwa im
         # ersten PR). Gewartet wird bis 120 s nur bei geänderter Maven-Konfiguration (pom.xml, .mvn/); danach läuft die Auswertung trotzdem
-        # (Warnung, fail-open: ein später verarbeiteter Snapshot bliebe unbemerkt, bekannte Grenze). Ein leerer Vergleich bei fertigem Snapshot
+        # (Warnung; beide node-Aufrufe laufen ohne GH_TOKEN, das Tool braucht es nicht; die Dateiliste der Compare-API endet bei 300 Dateien, ein
+        # größerer PR kann die Warte-Auslöser verdrängen, ebenfalls fail-open:  ein später verarbeiteter Snapshot bliebe unbemerkt, bekannte Grenze). Ein leerer Vergleich bei fertigem Snapshot
         # (pom.xml ohne Änderung am Baum, etwa ein Plugin-Bump) ist grün. Zwischendateien liegen in RUNNER_TEMP, nicht im Checkout.
         if: github.event_name == 'pull_request'
         env:
@@ -183,7 +184,7 @@ jobs:
           warten=0
           dateien=$(gh api "$api/compare/$BASIS...$KOPF" --jq '.files[].filename')
           printf '%s\n' "$dateien" > "$RUNNER_TEMP/dateien.txt"
-          if node tools/produkt-graph.mjs --warten "$RUNNER_TEMP/dateien.txt"; then warten=24; fi
+          if env -u GH_TOKEN node tools/produkt-graph.mjs --warten "$RUNNER_TEMP/dateien.txt"; then warten=24; fi
           for i in $(seq 0 "$warten"); do
             gh api -i "$api/dependency-graph/compare/$BASIS...$KOPF" > "$RUNNER_TEMP/antwort.txt"
             warnung=$(grep -i '^x-github-dependency-graph-snapshot-warnings:' "$RUNNER_TEMP/antwort.txt" | cut -d: -f2- | tr -d ' \r' || true)

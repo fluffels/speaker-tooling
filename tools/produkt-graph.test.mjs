@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { main, pruefeGraph, wartenNoetig } from "./produkt-graph.mjs";
 
@@ -90,6 +89,10 @@ function prozess(args, inhalt) {
   }
 }
 
+test("main: API-Fehlerobjekt (keine Liste) ist Exit 1 ohne Ausnahme", () => {
+  mitDatei('{"message":"Not Found"}', (pfad) => assert.equal(main(pfad), 1));
+});
+
 test("Prozess: Fund ist Exit 1, sauber Exit 0", () => {
   assert.equal(prozess([], JSON.stringify([eintrag()])), 1);
   assert.equal(prozess([], "[]"), 0);
@@ -109,6 +112,9 @@ test("Warten: pom.xml und .mvn/ auch in Unterordnern lösen es aus, andere Datei
   assert.equal(wartenNoetig([".mvn/maven.config"]), true);
   assert.equal(wartenNoetig(["frontend/package.json", "docs/x.md", "backend/app/src/Main.java"]), false);
   assert.equal(wartenNoetig(["xpom.xml", "backend/foo.mvn/x"]), false);
+  // rechte Grenzen und Punkt-Escape: Nachbarn von pom.xml und .mvn/ lösen nichts aus
+  assert.equal(wartenNoetig(["backend/pom.xml.orig", "pom.xml.versionsBackup", "backend/pomXxml"]), false);
+  assert.equal(wartenNoetig(["backend/.mvnrc", ".mvnx/a", "backend/xmvn/a", "backend/Xmvn/a"]), false);
   assert.equal(wartenNoetig([]), false);
 });
 
