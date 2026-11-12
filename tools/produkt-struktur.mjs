@@ -5,7 +5,10 @@
 // (der Aggregator wertet nur `toJSON(needs)` aus, ein Job außerhalb von `needs` würde den Merge nicht blockieren).
 // Exit 0 sauber, 1 bei Funden (Format `pfad:zeile: Meldung`) oder wenn keine Docker-/Compose-Datei gefunden wird.
 // Grenzen, nicht erfasst: `docker run` in Workflow-Steps, Image-Literale in Java (Testcontainers), Images in anderen
-// Workflow-Feldern (`container:`, `services:`), Compose-Dienste über `extends` oder `include`.
+// Workflow-Feldern (`container:`, `services:`), Compose-Dienste über `extends` oder `include`, Dateien außerhalb der geschlossenen
+// Musterliste (`Dockerfile.dev`, `Containerfile`, `compose.override.yaml`; nur ein Fund von null Dateien schlägt fail-closed an).
+// Der Wächter schützt sich nicht selbst: wer `struktur` aus `needs` streicht, nimmt ihn aus dem Merge-Block.
+// Lokal: `node --test tools/produkt-struktur.test.mjs && node tools/produkt-struktur.mjs` (`testGezielt` kennt nur Java-Pfade).
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
