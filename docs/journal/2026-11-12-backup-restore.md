@@ -17,9 +17,66 @@
 - Red-Green (je einzeln verfälscht, Test rot, zurückgesetzt, grün): Leer-Prüfung auf „immer leer“, Dateiprüfung, `--single-transaction`, Relationsarten, Argumentzahl `-ne 1`, `! -f`, Leer-Prüfung und Überschreibschutz in `backup.sh`. Die Test-Lens fand zuerst sieben überlebende Verfälschungen; die Fälle dazu (kaputte Sicherung, Relationsarten, zwei Argumente, Verzeichnis, leerer Dump, vorhandene Datei über einen `date`-Stub) stehen jetzt im Test.
 - CI-Läufe der Jobs `betrieb-linux` und `betrieb-macos`: siehe PR (Link folgt mit dem Lauf).
 
-## Git-Bash-Lauf
+## Compose-Restore auf macOS
 
-Offen: Der Restore der Compose-Datenbank in eine leere Datenbank unter Git Bash ist noch nicht durchgeführt (Git Bash gibt es nur unter Windows, kein CI-Runner mit Linux-Containern dort). Runbook: [Probe-Restore](../betrieb.md#probe-restore-ohne-zerstörung). Befehle und Ausgabe kommen hierher, sobald er gelaufen ist.
+AK 2 (angepasst: macOS statt Git Bash, es gibt keinen Windows-Host): Das Runbook aus [Betrieb](../betrieb.md#probe-restore-ohne-zerstörung) lief einmal auf macOS mit `/bin/bash` 3.2.57 gegen die Compose-Datenbank (`postgres:18`, Backend einmal gelaufen, Schema `app` vorhanden), danach der Weg „leere Datenbank herstellen“ für die Compose-Datenbank selbst. Der Text der Tabelle kam nach dem Restore unverändert zurück, das Backend lieferte ihn wieder aus.
+
+```text
+bash: 3.2.57(1)-release
+$ /bin/bash betrieb/backup.sh
+Sicherung geschrieben (Klartext, nur eigene Daten, nicht weitergeben).
+<repo>/backups/speakertooling-20261112-122057.sql
+[exit 0]
+$ docker compose exec -T db createdb -U speakertooling speakertooling_probe
+[exit 0]
+$ env DB_NAME=speakertooling_probe /bin/bash betrieb/restore.sh backups/speakertooling-20261112-122057.sql
+Sicherung eingespielt in speakertooling_probe: backups/speakertooling-20261112-122057.sql
+[exit 0]
+$ docker compose exec -T db psql -U speakertooling -d speakertooling_probe -c select * from app.begruessung
+ id |         text          
+----+-----------------------
+  1 | Hallo Speaker-Tooling
+(1 row)
+
+[exit 0]
+$ env DB_NAME=speakertooling_probe /bin/bash betrieb/restore.sh backups/speakertooling-20261112-122057.sql
+Ziel-Datenbank speakertooling_probe ist nicht leer (gefundene Schemata: app ); nichts eingespielt.
+[exit 2]
+$ /bin/bash betrieb/restore.sh backups/gibt-es-nicht.sql
+Sicherungsdatei fehlt oder ist nicht lesbar: backups/gibt-es-nicht.sql
+[exit 1]
+$ docker compose exec -T db dropdb -U speakertooling speakertooling_probe
+[exit 0]
+--- leere DB herstellen und Compose-DB zurückspielen ---
+$ docker compose stop backend
+ Container st-10-backend-1 Stopping 
+ Container st-10-backend-1 Stopped 
+[exit 0]
+$ docker compose exec -T db dropdb -U speakertooling speakertooling
+[exit 0]
+$ docker compose exec -T db createdb -U speakertooling speakertooling
+[exit 0]
+$ /bin/bash betrieb/restore.sh backups/speakertooling-20261112-122057.sql
+Sicherung eingespielt in speakertooling: backups/speakertooling-20261112-122057.sql
+[exit 0]
+$ docker compose exec -T db psql -U speakertooling -d speakertooling -c select * from app.begruessung
+ id |         text          
+----+-----------------------
+  1 | Hallo Speaker-Tooling
+(1 row)
+
+[exit 0]
+$ docker compose start backend
+ Container st-10-db-1 Waiting 
+ Container st-10-db-1 Healthy 
+ Container st-10-backend-1 Starting 
+ Container st-10-backend-1 Started 
+[exit 0]
+$ curl -s http://127.0.0.1:8090/api/begruessung
+{"text":"Hallo Speaker-Tooling"}[exit 0]
+```
+
+Git Bash: nicht belegt, kein Windows-Host. Die Skripte sind Git-Bash-kompatibel geschrieben (bash 3.2, `tr -d '\r'`, keine Argumente mit führendem `/`), der Lauf unter Git Bash steht aus.
 
 ## Learning
 

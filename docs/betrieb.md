@@ -1,6 +1,6 @@
 # Betrieb: Sicherung und Wiederherstellung der Datenbank
 
-Zwei Bash-Skripte unter `betrieb/` sichern die PostgreSQL-Datenbank und spielen eine Sicherung in eine leere Datenbank zurück. Sie laufen unter macOS (`/bin/bash` 3.2) und Linux (beides in der CI belegt) und sind für Git Bash ausgelegt (Lauf offen, siehe [Journal](journal/2026-11-12-backup-restore.md#git-bash-lauf)). Relative Pfade (Sicherungsdatei, `BACKUP_DIR`) gelten ab der Repo-Wurzel, die Skripte wechseln dorthin.
+Zwei Bash-Skripte unter `betrieb/` sichern die PostgreSQL-Datenbank und spielen eine Sicherung in eine leere Datenbank zurück. Sie laufen unter macOS (`/bin/bash` 3.2) und Linux (beides in der CI belegt) und sind Git-Bash-kompatibel geschrieben (nicht belegt, kein Windows-Host, siehe [Journal](journal/2026-11-12-backup-restore.md#compose-restore-auf-macos)). Relative Pfade (Sicherungsdatei, `BACKUP_DIR`) gelten ab der Repo-Wurzel, die Skripte wechseln dorthin.
 
 ## Sicherung
 

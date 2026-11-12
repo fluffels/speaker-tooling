@@ -120,7 +120,7 @@ mkdir -p "$TMP/bin"
 printf '#!/bin/sh\necho 20260101-000000\n' > "$TMP/bin/date"; chmod +x "$TMP/bin/date"
 VORHANDEN="$LEERDIR/${QUELLE}-20260101-000000.sql"
 echo "alt" > "$VORHANDEN"
-if PATH="$TMP/bin:$PATH" DB_EXEC=true DB_NAME="$QUELLE" BACKUP_DIR="$LEERDIR" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+if PATH="$TMP/bin:$PATH" DB_EXEC=echo DB_NAME="$QUELLE" BACKUP_DIR="$LEERDIR" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Vorhandene Sicherungsdatei: Exit 1" 1 "$RC"
 pruefe_enthaelt "Vorhandene Sicherungsdatei: Meldung nennt Pfad" "existiert schon, nichts überschrieben: $VORHANDEN" "$(cat "$TMP/e")"
 pruefe_gleich "Vorhandene Sicherungsdatei unverändert" "alt" "$(cat "$VORHANDEN")"
@@ -163,9 +163,10 @@ LEER="$TMP/leer.sql"; : > "$LEER"
 if restore "$ZIEL" "$LEER" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Leere Datei: Exit 1" 1 "$RC"
 pruefe_enthaelt "Meldung nennt den Pfad der leeren Datei" "$LEER" "$(cat "$TMP/e")"
-if "$BASH" "$WURZEL/betrieb/restore.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+if DB_NAME="$ZIEL" "$BASH" "$WURZEL/betrieb/restore.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Ohne Argument: Exit 1" 1 "$RC"
-if "$BASH" "$WURZEL/betrieb/restore.sh" "$DATEI" "$DATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_enthaelt "Ohne Argument: Aufrufhilfe" "Aufruf: bash betrieb/restore.sh" "$(cat "$TMP/e")"
+if DB_NAME="$ZIEL" "$BASH" "$WURZEL/betrieb/restore.sh" "$DATEI" "$DATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Zwei Argumente: Exit 1" 1 "$RC"
 if restore "$ZIEL" "$TMP" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Verzeichnis statt Datei: Exit 1" 1 "$RC"
