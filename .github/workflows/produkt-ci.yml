@@ -1,5 +1,6 @@
 # Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests)
 # und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
+# Der Job backend misst danach die Diff-Coverage des Produkts (check:diffcoverage: JaCoCo-Bericht des Backends und lcov des Frontends gegen den Diff, Schichten und Floors laut scripts/layers.cjs).
 # Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Advisory-Prüfung des Graph-Vergleichs; Struktur: Digest-Pins und needs.
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
@@ -26,6 +27,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Volle Historie: check:diffcoverage schneidet den Diff gegen die Basis und liest die Commit-Zeilen für Overrides.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Java 25 einrichten
@@ -39,6 +42,43 @@ jobs:
       - name: Backend bauen und testen
         working-directory: backend
         run: ./mvnw -B verify
+
+      - name: Node einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Gate-Abhängigkeiten installieren (Root, ohne Skripte)
+        run: npm ci --ignore-scripts
+
+      - name: Frontend-Abhängigkeiten installieren
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend-Coverage erzeugen (lcov)
+        working-directory: frontend
+        run: npx ng test --watch=false --coverage
+
+      # Auf einem PR ist die Diff-Basis der erste Elternteil des Merge-Commits, auf main der Vorgänger-Commit.
+      - name: Diff-Basis bestimmen
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base=$(git rev-parse HEAD^1)
+          else
+            base="$BEFORE_SHA"
+          fi
+          echo "FACTORY_DIFF_BASE=$base" >> "$GITHUB_ENV"
+
+      # Berichte: coverage.berichte in .factory/projekt.json (JaCoCo je Modul, Frontend-lcov); Schichten: scripts/layers.cjs.
+      - name: Diff-Coverage des Produkts
+        run: npm run check:diffcoverage
 
   frontend:
     name: Frontend (ng build, ng test)
