@@ -27,4 +27,8 @@ Vorher-Wert von `mergeStateStatus` vor dem Ruleset-PUT war `BLOCKED`, nicht `CLE
 - Ein Sammel-Job mit `if: always()` und `needs` ist der stabile Required-Check-Name; einzelne Jobs können umbenannt werden, ohne das Ruleset anzufassen. Ein neuer Produkt-Job muss in `needs` eingetragen werden, sonst blockiert er den Merge nicht.
 - Eine Negativprobe im PR eines Repos mit Nachweis-Gate ist nicht isoliert: das Nachweis-Gate hält den PR schon vorher auf `BLOCKED`. Den Pflicht-Check einzeln über `gh pr checks --required` belegen.
 - Jeder Push vor dem Nachweis-Commit ist für `Tests, Typecheck & Builds` rot und zählt für den Festgefahren-Zähler (Schwelle 4). Vorarbeit lokal committen und gebündelt pushen.
-- Die Required Checks im Ruleset haben keinen `integration_id`-Pin: ein gleichnamiger Status einer anderen App würde zählen. Als Befund an die Fabrik gemeldet.
+- Die Required Checks im Ruleset haben keinen `integration_id`-Pin: ein gleichnamiger Status einer anderen App würde zählen. Als Befund an die Fabrik gemeldet (Meldestelle, factory#362).
+
+## Probe des Prüfausdrucks
+
+Lokal mit `jq -e 'length > 0 and all(.[]; .result == "success")'` auf nachgebauten `needs`-Objekten: `success` und `success` ergibt Exit 0; `failure`, `cancelled`, `skipped` und `{}` ergeben je Exit 1. Mit `any` statt `all` wird der `failure`-Fall fälschlich 0, ohne `length > 0` wird `{}` fälschlich 0: beide Verfälschungen fallen in dieser Tabelle auf. Die Backend-Seite ist nicht eigens rot gefahren; sie läuft über denselben Ausdruck und denselben `needs`-Eintrag.
