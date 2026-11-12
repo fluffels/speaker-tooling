@@ -122,6 +122,24 @@ jobs:
           # Absolut: die Action führt mvnw mit cwd=directory aus, ein relativer Pfad würde als backend/backend/mvnw gesucht.
           directory: ${{ github.workspace }}/backend
 
+      - name: Auf den Snapshot im Dependency-Graph warten (nur Pull Requests)
+        # Der Graph verarbeitet den Snapshot asynchron; retry-on-snapshot-warnings greift dafür nicht (Beleg: Lauf 43203522745, Review
+        # 8 s nach der Submission ohne Maven-Änderungen, die Compare-API zeigte sie kurz danach). Bis 120 s auf einen pom.xml-Eintrag im
+        # Compare warten; ein PR ohne Maven-Änderung hat keinen, dort läuft die Zeit ab und der Review startet trotzdem (Warnung).
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASIS: ${{ github.event.pull_request.base.sha }}
+          KOPF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for i in $(seq 1 24); do
+            if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/compare/$BASIS...$KOPF" --jq '.[].manifest' | grep -q 'pom\.xml$'; then
+              echo "Maven-Snapshot nach $((i * 5)) s im Graph"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::Kein Maven-Snapshot im Compare nach 120 s (PR ohne Maven-Änderung oder Graph verzögert)"
+
       - name: Dependency Review (nur Pull Requests)
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
