@@ -20,6 +20,7 @@
 	<properties>
 		<java.version>25</java.version>
 		<jacoco.version>0.8.16</jacoco.version>
+		<tomcat.version>11.0.2</tomcat.version>
 	</properties>
 	<build>
 		<pluginManagement>
