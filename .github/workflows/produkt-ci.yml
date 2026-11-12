@@ -2,6 +2,7 @@
 # und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
 # Der Job backend misst danach die Diff-Coverage des Produkts (check:diffcoverage: JaCoCo-Bericht des Backends und lcov des Frontends gegen den Diff, Schichten und Floors laut scripts/layers.cjs).
 # Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Advisory-Prüfung des Graph-Vergleichs (tools/produkt-graph.mjs); Struktur: Digest-Pins und needs.
+# Die Jobs betrieb-linux und betrieb-macos fahren den Rundlauf-Test für Backup und Restore (betrieb/test-rundlauf.sh; macOS mit /bin/bash 3.2).
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -221,6 +222,59 @@ jobs:
       - name: Basis-Images gepinnt, alle Jobs in needs
         run: node tools/produkt-struktur.mjs
 
+  betrieb-linux:
+    name: Betrieb (Backup/Restore, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Skripte statisch prüfen
+        run: shellcheck betrieb/*.sh
+
+      - name: Rundlauf gegen die Compose-Datenbank
+        run: |
+          POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+          export POSTGRES_PASSWORD
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          docker compose up -d --wait db
+          bash betrieb/test-rundlauf.sh
+
+  betrieb-macos:
+    name: Betrieb (Backup/Restore, macOS, bash 3.2)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: PostgreSQL 18 installieren
+        run: |
+          brew install postgresql@18
+          echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
+
+      - name: PostgreSQL starten
+        run: |
+          initdb -D "$RUNNER_TEMP/pgdaten" -U speakertooling --auth=trust -E UTF8 --locale=en_US.UTF-8
+          pg_ctl -D "$RUNNER_TEMP/pgdaten" -l "$RUNNER_TEMP/pg.log" -w start
+
+      - name: bash-Version prüfen (muss 3.2 sein)
+        run: /bin/bash -c 'case "$BASH_VERSION" in 3.2.*) echo "$BASH_VERSION";; *) exit 1;; esac'
+
+      - name: Rundlauf lokal ohne Container
+        env:
+          DB_EXEC: ""
+          DB_USER: speakertooling
+        run: /bin/bash betrieb/test-rundlauf.sh
+
   produkt-ci:
     # Required Check im Ruleset main-schutz (#9): grün nur, wenn jeder Job in needs success meldet.
     # Neuer Produkt-Job: hier in needs eintragen, sonst blockiert er den Merge nicht (Wächter: Job `struktur`, tools/produkt-struktur.mjs).
@@ -231,6 +285,8 @@ jobs:
       - frontend-audit
       - backend-abhaengigkeiten
       - struktur
+      - betrieb-linux
+      - betrieb-macos
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -21,7 +21,7 @@ Jedes Java-Paket nennt einen Backtick-Pfad (Gate `check:docmap`):
 
 ## Datenbank
 
-Schema `app`, Migrationen unter `backend/app/src/main/resources/db/migration/app` (Flyway, Boot-Autokonfiguration). `V1__begruessung.sql` legt die einzeilige Tabelle `app.begruessung` an und ist nach dem Merge unveränderlich (Flyway-Checksumme); Änderungen kommen als `V2`. Image und Major: `postgres:18`, in `compose.yaml` und im Test (`PostgresTestcontainer`) gleich; ein Major-Wechsel bricht bestehende Volumes.
+Schema `app`, Migrationen unter `backend/app/src/main/resources/db/migration/app` (Flyway, Boot-Autokonfiguration). `V1__begruessung.sql` legt die einzeilige Tabelle `app.begruessung` an und ist nach dem Merge unveränderlich (Flyway-Checksumme); Änderungen kommen als `V2`. Image und Major: `postgres:18`, in `compose.yaml` und im Test (`PostgresTestcontainer`) gleich; ein Major-Wechsel bricht bestehende Volumes; vorher sichern (Klartext-SQL, [Betrieb](../betrieb.md)) und danach zurückspielen.
 
 ## Konfiguration
 
@@ -38,6 +38,8 @@ curl http://127.0.0.1:8080/api/begruessung
 docker compose exec db psql -U speakertooling -d speakertooling -c "update app.begruessung set text = 'Neu' where id = 1"
 docker compose stop db          # danach: GET /actuator/health liefert 503 {"status":"DOWN"}
 ```
+
+Sicherung und Wiederherstellung der Datenbank: `bash betrieb/backup.sh` und `bash betrieb/restore.sh <datei>`, Anleitung in [Betrieb](../betrieb.md).
 
 ## Tests
 

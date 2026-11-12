@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Spielt eine Sicherung von backup.sh in eine LEERE Datenbank ein.
+# Aufruf: bash betrieb/restore.sh <datei>   Einstellungen: gemeinsam.sh (Ziel ist DB_NAME).
+# Exit-Codes: 1 Aufruf oder Datei, 2 Ziel-Datenbank nicht leer, sonst der Exit von psql.
+# Nur eigene Sicherungen einspielen: eine SQL-Datei kann psql-Metabefehle enthalten und ist ausführbarer Code.
+set -euo pipefail
+
+# shellcheck source=betrieb/gemeinsam.sh
+. "$(dirname "${BASH_SOURCE[0]}")/gemeinsam.sh"
+
+if [ "$#" -ne 1 ]; then
+  fehler "Aufruf: bash betrieb/restore.sh <sicherungsdatei>"
+  exit 1
+fi
+datei="${1-}"
+if [ ! -f "$datei" ] || [ ! -r "$datei" ]; then
+  fehler "Sicherungsdatei fehlt oder ist nicht lesbar: $datei"
+  exit 1
+fi
+if [ ! -s "$datei" ]; then
+  fehler "Sicherungsdatei ist leer: $datei"
+  exit 1
+fi
+
+# Leer heißt: kein Schema außer public und den Systemschemata, und keine Relation. Der DB-Name steht nie im SQL-Text.
+# Indizes (relkind i) fehlen bewusst: sie kommen nie ohne Tabelle vor. Fremdtabellen (f) sind ungetestet (brauchen eine FDW-Erweiterung).
+sql="select nspname from pg_namespace where nspname not in ('public', 'pg_catalog', 'information_schema') and nspname not like 'pg\_%'
+union
+select distinct n.nspname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where c.relkind in ('r', 'p', 'v', 'm', 'S', 'f') and n.nspname not in ('pg_catalog', 'information_schema') and n.nspname not like 'pg\_toast%'
+order by 1"
+# shellcheck disable=SC2086
+gefunden="$($DB_EXEC psql -U "$DB_USER" -d "$DB_NAME" -At -v ON_ERROR_STOP=1 -c "$sql" | tr -d '\r')"
+if [ -n "$gefunden" ]; then
+  fehler "Ziel-Datenbank $DB_NAME ist nicht leer (gefundene Schemata: $(echo "$gefunden" | tr '\n' ' ')); nichts eingespielt."
+  exit 2
+fi
+
+# shellcheck disable=SC2086
+$DB_EXEC psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 --single-transaction -q < "$datei" > /dev/null
+fehler "Sicherung eingespielt in $DB_NAME: $datei"
