@@ -39,7 +39,7 @@ import { EINGABE_TOOLS, brainMetrics, mitEingabe, pflegeIntervals, toolEventsFro
 import { ladeSessionDatei, projekteWurzel } from "./transkript.mjs";
 import { CACHE_TTL_MS, istEchtesModell, istNeuaufbau, kontextVon, median } from "./mess-lib.mjs";
 import { PRICES, PRICES_STAND, num, periodAt, priceCall, priceParts, sumParts } from "./preise.mjs";
-import { callsFromTranscript, eindeutigeCalls } from "./transkript-calls.mjs";
+import { callsDerSitzung, callsFromTranscript } from "./transkript-calls.mjs";
 import { fetchSessionObservations, langfuseZugang as zugangAus, usageAusObservation } from "./langfuse-api.mjs";
 import { fehlerArten, permissionGruende, pruefLaeufe, wiederlesen } from "./tool-metriken.mjs";
 import { factorySeiteIn } from "./factory-seite.mjs";
@@ -72,6 +72,14 @@ const WORKFLOW_LABELS = [
   [/^(pr\+merge|ci-fix)\b/i, "CI/Merge"],
 ];
 
+/** Namens-Heuristik für den Agententyp (Reihenfolge zählt: Planer-, Recherche-, Lens-Namen vor „umsetzer“): Phase („Planung“/„Recherche“/„Review“), "umsetzer" oder null. Gemeinsame Quelle von classifySubagent und istUmsetzer. */
+function namensArt(t) {
+  if (/planner/i.test(t)) return "Planung";
+  if (/explore/i.test(t)) return "Recherche";
+  if (/lens/i.test(t)) return "Review";
+  return /umsetzer/i.test(t) ? "umsetzer" : null;
+}
+
 /**
  * Phase eines Subagenten: erst der exakte Agentenname aus `agenten` (`agenten.planer`/`lens`; `umsetzer` und `gruppe` haben keine feste Phase), dann der Typ per
  * Namens-Heuristik (`agenten` fehlt oder passt nicht), dann Workflow-Label,
@@ -87,12 +95,9 @@ export function classifySubagent(agentType, description, agenten = {}) {
     if (t === agenten.lens) return "Review";
     if (t === agenten.umsetzer || t === agenten.gruppe) return null; // keine feste Phase: der Zeitschnitt teilt sie (s. u.)
   }
-  if (/planner/i.test(t)) return "Planung";
-  if (/explore/i.test(t)) return "Recherche";
-  if (/lens/i.test(t)) return "Review";
-  // Der Umsetzer arbeitet über Umsetzung UND CI/Merge: keine feste Phase, der
-  // Zeitschnitt teilt ihn; vor den Beschreibungs-Regeln, damit „Plan“/„Review“ im Text nicht greift.
-  if (/umsetzer/i.test(t)) return null;
+  const art = namensArt(t);
+  if (art === "umsetzer") return null; // der Umsetzer arbeitet über Umsetzung UND CI/Merge: keine feste Phase, der Zeitschnitt teilt ihn; vor den Beschreibungs-Regeln, damit „Plan“/„Review“ im Text nicht greift
+  if (art !== null) return art;
   for (const [re, phase] of WORKFLOW_LABELS) if (re.test(d)) return phase;
   if (/\blens\b|review|kritiker/i.test(d)) return "Review";
   if (/\bplan/i.test(d)) return "Planung";
@@ -129,6 +134,16 @@ export function countReviewRounds(reviewDescriptions) {
 }
 
 
+/**
+ * Umsetzer (nicht Gruppen-Umsetzer): exakter Name `agenten.umsetzer`, sonst dieselbe Namens-Heuristik wie
+ * `classifySubagent` (Planer-, Lens- und Recherche-Namen zählen nicht, `agenten.gruppe` ebenso nicht).
+ */
+function istUmsetzer(agentType, agenten = {}) {
+  const t = typeof agentType === "string" ? agentType : "";
+  if (t === agenten.umsetzer) return true;
+  return t !== agenten.gruppe && namensArt(t) === "umsetzer";
+}
+
 const subKey = (c) => c.subagent.id ?? c.subagent;
 /**
  * Schlüssel der Konversation eines Calls (#1331): Subagent über `subKey`, der Hauptagent über `main:<sessionId>`. Mehrere
@@ -141,7 +156,8 @@ const agentKey = (c) => (c.subagent ? subKey(c) : c.session ? `main:${c.session}
  * Sockel (#1198/#1206): Kontext des ERSTEN Calls des Hauptagenten (Größe der Session, darum
  * sessionweit und unabhängig von `--from`) bzw. je Subagent; Planung und Review als Median über
  * die Subagenten IM Ticket-Fenster (`windowCalls`: nach `--from`, ohne Nachlauf), damit der Planer
- * eines anderen Tickets derselben Session nicht mitzählt.
+ * eines anderen Tickets derselben Session nicht mitzählt. Der Umsetzer-Sockel (factory#307) ist derselbe Median über die
+ * Umsetzer-Subagenten (auch der Fortsetzungs-Umsetzer des Phasen-Schnitts), ohne Gruppen-Umsetzer.
  */
 function sockelOf(allCalls, windowCalls, agenten) {
   const first = (calls) => [...calls].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
@@ -154,7 +170,17 @@ function sockelOf(allCalls, windowCalls, agenten) {
         .filter((c) => classifySubagent(c.subagent.agentType, c.subagent.description, agenten) === phase)
         .map(kontextVon),
     );
-  return { main: main ? kontextVon(main) : null, planung: phaseSockel("Planung"), review: phaseSockel("Review") };
+  const umsetzer = median(
+    [...firstBySub.values()].filter((c) => istUmsetzer(c.subagent.agentType, agenten)).map(kontextVon),
+  );
+  return { main: main ? kontextVon(main) : null, planung: phaseSockel("Planung"), review: phaseSockel("Review"), umsetzer };
+}
+
+/** Report-Zeile mit Sockel (Haupt, Planer, Lens, Umsetzer) und Median-Kontext; `dash` setzt für fehlende Werte den Strich. */
+function sockelZeile(summary, dash) {
+  const sk = summary.sockel;
+  const mc = summary.medianContext;
+  return `Sockel Haupt ${dash(sk?.main)} · Planer ${dash(sk?.planung)} · Lens ${dash(sk?.review)} · Umsetzer ${dash(sk?.umsetzer)} · Median-Kontext Haupt ${dash(mc?.main)} / gesamt ${dash(mc?.all)}`;
 }
 
 /** Ohne Preis, aber nur echte Modelle: der Client-Platzhalter `<synthetic>` hat nie einen Preis (#1663). */
@@ -308,7 +334,7 @@ function costPartsOf(calls) {
   return parts;
 }
 
-/** Pause, ab der ein Cache (5-Minuten-TTL) als abgelaufen gilt: Subagenten schreiben mit 5 m, der Hauptchat mit 1 h. */
+/** Pause, ab der ein Cache (5-Minuten-TTL) als abgelaufen gilt: Subagenten schreiben mit 5 m (außer Rollen mit `experimental.cacheTtl: 1h`), der Hauptchat mit 1 h. */
 const CACHE_PAUSE_MS = { subagent: CACHE_TTL_MS.fuenfMin, main: CACHE_TTL_MS.eineStunde };
 
 /**
@@ -360,19 +386,10 @@ export function readTranscriptSession(sessionId, projectsRoot) {
   const main = candidates.find((p) => existsSync(p));
   if (!main) throw new Error(`Kein Transkript für Session ${sessionId} unter ${projectsRoot}`);
   const sitzung = ladeSessionDatei(main);
-  const all = callsFromTranscript(sitzung.main);
-  for (const c of all.calls) c.session = sessionId;
+  const all = callsDerSitzung(sitzung, { session: sessionId });
+  // Die Tool-Events tragen keine Message-übergreifende ID und werden nicht dedupliziert (Messung #1573: 20 von 31.042 Messages).
   all.events = toolEventsFromTranscript(sitzung.main, `main:${sessionId}`);
-  for (const { datei, meta, zeilen } of sitzung.subagents) {
-    const sub = { id: datei, agentType: meta.agentType, description: meta.description, parentAgentId: meta.parentAgentId };
-    const r = callsFromTranscript(zeilen, sub);
-    all.events.push(...toolEventsFromTranscript(zeilen, sub.id));
-    all.calls.push(...r.calls);
-    all.questions += r.questions;
-  }
-  // Dieselbe message.id in Haupt- und Subagent-Datei zählt einmal (Messung #1573: 20 von 31.042 Messages). Grenze: die Tool-Events
-  // darüber tragen keine Message-übergreifende ID und werden nicht dedupliziert.
-  all.calls = eindeutigeCalls(all.calls);
+  for (const { datei, zeilen } of sitzung.subagents) all.events.push(...toolEventsFromTranscript(zeilen, datei));
   return all;
 }
 
@@ -529,12 +546,7 @@ export function renderMarkdown(summary, loop = {}, { planZeile } = {}) {
     loop.mergedAt === undefined ? "–" : mergedWithoutRework(loop.mergedAt, loop.failedPushes) ? "ja" : "nein";
   const dash = (v) => (v === null || v === undefined ? "–" : fmt(v));
   const brain = summary.brain;
-  const sk = summary.sockel;
-  const mc = summary.medianContext;
-  lines.push(
-    "",
-    `Sockel Haupt ${dash(sk?.main)} · Planer ${dash(sk?.planung)} · Lens ${dash(sk?.review)} · Median-Kontext Haupt ${dash(mc?.main)} / gesamt ${dash(mc?.all)}`,
-  );
+  lines.push("", sockelZeile(summary, dash));
   const parts = summary.costParts;
   const sum = parts ? sumParts(parts) : 0;
   if (sum > 0) {

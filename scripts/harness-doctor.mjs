@@ -14,7 +14,9 @@
  * Je Punkt eine Zeile mit drei möglichen Ausgängen: `OK <Punkt>`, `LÜCKE <Punkt>: <Befund> Fix: <Anweisung>` oder `NICHT PRÜFBAR <Punkt>: <Grund> Fix: <Anweisung>` (der
  * Zustand ist nicht belegbar: Endpunkt-Fehler oder fehlendes Feld, nie still grün). Exit 0 ohne Lücke und ohne nicht prüfbaren Punkt, 1 mit mindestens einem von beiden
  * (die Summenzeile zählt beide getrennt), 2 bei Aufruf-Fehler oder unlesbarer Config bzw. unlesbarem Ruleset-Spiegel (dann ohne einen einzigen gh-Aufruf).
- * Die Dateipunkte `Root-Kontextdatei`, `Zeilenenden`, `Projektdateien`, `Langfuse-Takt`, `Gezielter Test` und `Required-Check-Quellen` (factory#94, factory#170, factory#208, factory#148, harness-doctor-dateien.mjs) prüfen die Projektdateien des Beziehers (keine CLAUDE.md im Root, eol-Regeln und LF im Index, die geschlossene Liste der vom Sync nicht gelieferten Dateien, Workflow `board-takt.yml` und Skript `langfuse-takt.mjs` angekommen, `befehle.testGezielt` bei Nicht-JS/TS-Endungen, jeder Required-Check-Kontext genau eine Quelle unter `.github/workflows/`, gelesen ohne `yaml`), brauchen kein Token und laufen auch im Wochenlauf, nicht in `--einrichten`.
+ * Die Dateipunkte `Root-Kontextdatei`, `Zeilenenden`, `Projektdateien`, `Langfuse-Takt`, `Gezielter Test`, `Required-Check-Quellen`, `Code-Scanning-Quellen` und `Workflow-Auslöser` (factory#94, factory#170, factory#208, factory#148, harness-doctor-dateien.mjs) prüfen die Projektdateien des Beziehers (keine CLAUDE.md im Root, eol-Regeln und LF im Index, die geschlossene Liste der vom Sync nicht gelieferten Dateien, Workflow `board-takt.yml` und Skript `langfuse-takt.mjs` angekommen, `befehle.testGezielt` bei Nicht-JS/TS-Endungen, jeder Required-Check-Kontext genau eine Quelle unter `.github/workflows/`, gelesen ohne `yaml`), brauchen kein Token und laufen auch im Wochenlauf, nicht in `--einrichten`; im Vorab-Abbruch (Config oder Spiegel nicht ladbar, Exit 2) nennt `Required-Check-Quellen` „Config nicht geladen“ als Grund (`vorAbbruch`, factory#220). Dazu kommt im Bezieher der Punkt `Factory-Update` (factory#220, harness-doctor-factory-update.mjs: `factory-update.yml` da und Workflow aktiv; kein Token außer Leserecht auf Actions).
+ * Nur lokal in `--pruefen` kommt der Punkt `Ruleset-Spiegel` (factory#247, harness-doctor-ruleset.mjs: Spiegel gegen das Server-Ruleset; `pruefLauf` bekommt `rulesetLesen` über `gh`; ein Spiegel ohne `id` lässt ihn aus; der Wochenlauf ruft ihn nie, sein Token liest `bypass_actors` nicht).
+ * Ebenfalls nur lokal in `--pruefen` (`lokalStandard`, `pruefLauf({ lokal })`): `Git-Hooks` (factory#247 L1, harness-doctor-githooks.mjs: `core.hooksPath` gleich `.githooks`) und `Board-Ansicht` (L7/L9, harness-doctor-board.mjs: Standardansicht jedes Boards filtert `-status:Done repo:<Repo>`, ohne Sortierung, Workflow „Auto-archive items“ aktiv; per GraphQL über `gh`, nicht lesbare Felder sind NICHT PRÜFBAR).
  * Die acht Sicherheitspunkte (Secret Scanning, Push Protection, Non-Provider-Patterns, Validity Checks, PVR, Dependabot Security Updates, Code-Scanning,
  * SHA-Pinning; dazu der Punkt `Sicherheits-Module` (factory#119, `modulPunkt` in harness-doctor-lib.mjs: fehlender Schlüssel `module` ist eine Lücke, eine Teilauswahl OK mit HINWEIS, ein nicht lesbares Manifest NICHT PRÜFBAR); factory#116, harness-doctor-sicherheit.mjs) stehen immer da; `--einrichten` ändert sie nie, nur `ANLEITUNG … Link: …`. Reines Node-Skript ohne Modell-Tokens; `gh` und
  * der Langfuse-Aufruf sind injizierbar (Tests laufen ohne Netz). Alles Projektspezifische kommt zur Laufzeit aus `.factory/projekt.json`
@@ -37,12 +39,15 @@ import { fehlerText, ghJson, ghText } from "./gh-cli.mjs";
 import { istDirektaufruf } from "./direktaufruf.mjs";
 import { kernEnvNamen, PROJEKT_CONFIG } from "./projekt-config-lib.mjs";
 import { istBezieher } from "./sync-stand-lib.mjs";
-import { pruefeDateien } from "./harness-doctor-dateien.mjs";
-import { mitMeldestelle } from "./harness-doctor-meldestelle.mjs";
+import { dateienStandard } from "./harness-doctor-factory-update.mjs";
+import { boardPunkte } from "./harness-doctor-board.mjs";
+import { gitHooksPunkt, gitHooksStandard } from "./harness-doctor-githooks.mjs";
 import { WOCHENLAUF_PFAD, WOCHENLAUF_WORKFLOW, konfigFehlerText, ohneActionPins, pruefLauf } from "./harness-doctor-lib.mjs";
 
 // Die Prüf-API (Ableitung, Prüfpunkte, Vorlage) steht in der Lib; sie bleibt unter diesem Namen erreichbar.
 export { BOARD_PRUEFPUNKTE, STATUS_FELD_NAME, TODO_OPTION_NAME, WOCHENLAUF_PFAD, WOCHENLAUF_WORKFLOW, ohneActionPins, pruefLauf, pruefe, voraussetzungenAus, workflowsLesen } from "./harness-doctor-lib.mjs";
+
+export { dateienStandard };
 
 const SKRIPTE = dirname(fileURLToPath(import.meta.url));
 const USAGE = "Aufruf: node scripts/harness-doctor.mjs --pruefen [--config <pfad>] | --einrichten [--dry-run] [--config <pfad>]";
@@ -167,13 +172,16 @@ function pruefWurzel(rootDir, config) {
 /** Bricht die Config-Ladung ab (Exit 2), zeigen die Dateipunkte trotzdem, was im Projekt fehlt (sie brauchen weder Config noch gh). Ein Fehler dort bleibt still, der Config-Fehler zählt. */
 function dateipunkteVorAbbruch({ dateien, rootDir, out }) {
   try {
-    for (const p of dateien({ rootDir })) if (!p.ok) out(`${p.nichtPruefbar ? "NICHT PRÜFBAR" : "LÜCKE"} ${p.punkt}: ${einzeilig(p.befund)} Fix: ${p.fix}`);
+    for (const p of dateien({ rootDir, vorAbbruch: true })) if (!p.ok) out(`${p.nichtPruefbar ? "NICHT PRÜFBAR" : "LÜCKE"} ${p.punkt}: ${einzeilig(p.befund)} Fix: ${p.fix}`);
   } catch {
     /* der Config-Fehler wird gleich gemeldet */
   }
 }
 
-function pruefen({ werte, rootDir: aufruferRoot, gh, langfuse, env, out, err, kernEnv, dateien }) {
+/** Die lokalen Punkte von `--pruefen` (factory#247; `lokal` ersetzt sie in Tests): `Git-Hooks` (git config im Prüf-Root) und `Board-Ansicht` (GraphQL über `gh`); der Wochenlauf und `--einrichten` rufen sie nie. */
+export const lokalStandard = ({ gh, lokal }) => lokal ?? (({ rootDir, config }) => [gitHooksPunkt({ lesen: gitHooksStandard({ rootDir }) }), ...boardPunkte({ config, lesen: (a) => JSON.parse(gh(a)) })]);
+
+function pruefen({ werte, rootDir: aufruferRoot, gh, langfuse, env, out, err, kernEnv, dateien, lokal }) {
   const { wurzel: rootDir, abgeleitet, pfad: configPfad } = pruefWurzel(aufruferRoot, werte.config);
   if (abgeleitet) out(`Prüfwurzel: ${rootDir}`);
   let namen;
@@ -185,7 +193,7 @@ function pruefen({ werte, rootDir: aufruferRoot, gh, langfuse, env, out, err, ke
   }
   let ergebnis;
   try {
-    ({ ergebnis } = pruefLauf({ rootDir, configPfad, gh, langfuse, umgebung: { env, namen }, dateien }));
+    ({ ergebnis } = pruefLauf({ rootDir, configPfad, gh, langfuse, umgebung: { env, namen }, dateien, rulesetLesen: (a) => JSON.parse(gh(a)), lokal: lokalStandard({ gh, lokal }) }));
   } catch (e) {
     dateipunkteVorAbbruch({ dateien, rootDir, out });
     err(konfigFehlerText(e, rootDir));
@@ -215,7 +223,7 @@ function ausgabe(ergebnis, out) {
 
 export function main(
   argv = process.argv.slice(2),
-  { rootDir = join(SKRIPTE, ".."), gh = (a) => ghText(a, { timeout: 30000 }), langfuse = langfuseStandard, spawn = sammelticketStandard, env = process.env, out = console.log, err = console.error, kernEnv = kernEnvNamen, dateien = mitMeldestelle(pruefeDateien, { env, lesen: (a, token) => ghJson(a, { token, timeout: 30000 }) }) } = {},
+  { rootDir = join(SKRIPTE, ".."), gh = (a) => ghText(a, { timeout: 30000 }), langfuse = langfuseStandard, spawn = sammelticketStandard, env = process.env, out = console.log, err = console.error, kernEnv = kernEnvNamen, dateien = dateienStandard({ env, lesen: (a, token) => ghJson(a, { token, timeout: 30000 }) }), lokal } = {},
 ) {
   const { werte, fehler } = flagsLesen(argv, { pruefen: { type: "boolean" }, einrichten: { type: "boolean" }, "dry-run": { type: "boolean" }, config: { type: "string" } });
   const aufrufFehler = fehler?.text ?? (Number(werte.pruefen === true) + Number(werte.einrichten === true) !== 1 ? "Genau einen Modus angeben: --pruefen oder --einrichten" : null)
@@ -224,7 +232,7 @@ export function main(
     err(`${aufrufFehler}\n${USAGE}`);
     return AUFRUF_EXIT;
   }
-  return werte.einrichten ? einrichten({ werte, rootDir, gh, spawn, out, err }) : pruefen({ werte, rootDir, gh, langfuse, env, out, err, kernEnv, dateien });
+  return werte.einrichten ? einrichten({ werte, rootDir, gh, spawn, out, err }) : pruefen({ werte, rootDir, gh, langfuse, env, out, err, kernEnv, dateien, lokal });
 }
 
 if (istDirektaufruf(import.meta.url)) process.exitCode = main();

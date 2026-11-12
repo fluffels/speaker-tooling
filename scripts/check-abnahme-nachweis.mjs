@@ -11,11 +11,13 @@
  *    hinter einer bestandenen Abnahme ist ein Pass);
  *  - head-Regel: `head` liegt im Slice, ist gleich oder Nachfahre des Review-head, danach nur leere Commits und konfliktfreie Merges;
  *  - die Spur: der jüngste vertraute Kommentar mit Abnahme-Marker auf dem PR trägt gleichen head, Durchgang == `durchgaenge`, gleiches Urteil;
- *  - `entfaellt` ist nur grün, wenn das Ticket keine Kriterien hat oder kein Ticket verknüpft ist.
+ *  - `entfaellt` ist nur grün, wenn das Ticket keine Kriterien hat oder kein Ticket verknüpft ist; mit Kriterien genügt `entfaellt — klein: <Begründung>` bei berechneter
+ *    Größenstufe S (factory#271, `groessenstufe-lib.mjs`: aus dem Diff gerechnet, nie behauptet; Risikoklasse hoch ist nie S), wenn sich nichts beobachten lässt; bei `voll` bleibt es rot.
  *
  * Das Ticket ist die einzige Schließ-Referenz im PR-Body (Umgebungsvariable `FACTORY_PR_BODY`, alle GitHub-Schlüsselwörter zählen); mehrere sind rot.
  * Ein Entwurfs-PR wird nur berichtet: maßgeblich ist der Lauf nach `ready_for_review`. Den Entwurfs-Status liest der Wächter live vom PR (`repos/<repo>/pulls/<nr>`, ein Rerun trägt sonst den veralteten Ereigniswert); `FACTORY_PR_DRAFT` gilt nur ohne PR-Nummer, ein fehlgeschlagener Abruf ist rot. Jeder git- oder gh-Fehler ist rot
  * (fail-closed). Druckventil: die Override-Zeile (Schlüssel `abnahmeOverride`, `#<nr> <warum>`), ausgewertet vor jedem gh-Aufruf.
+ * Ist im Slice eine gültige Review-Override-Zeile (Schlüssel `reviewOverride`), entfallen Review-Zeile, Cap und der Vergleich mit dem Review-head (Ausgabe `Review-Override: Cap- und head-Vergleich entfallen`).
  * Bewusst kein npm-`check:*`-Skript und nicht in `verify` (der Nachweis entsteht erst nach dem Review). Lokal:
  *   node scripts/check-abnahme-nachweis.mjs
  *
@@ -26,7 +28,8 @@ import { execFileSync } from "node:child_process";
 import { resolveBase } from "./check-basis.mjs";
 import { fehlerText, ghJson } from "./gh-cli.mjs";
 import { issueKommentare } from "./fremdtext-lib.mjs";
-import { MAX_REVIEW_PAESSE, parseNachweis, vertrauteAbnahmeMarker } from "./nachweis-lib.mjs";
+import { MAX_REVIEW_PAESSE, kleinGrund, parseNachweis, vertrauteAbnahmeMarker } from "./nachweis-lib.mjs";
+import { groessenstufeAusGit, risikoMusterAus } from "./groessenstufe-lib.mjs";
 import { ladeProjektConfig, spracheAus, trenneConfigArg, umgebungsWert } from "./projekt-config-lib.mjs";
 import { zerlegeRepo } from "./repo-form.mjs";
 import { commitImSlice, commitZeilenAus, loeseCommit, meldeUngueltigeOverrides, sliceOverride } from "./slice-override.mjs";
@@ -50,7 +53,7 @@ const menge = (urteil) => urteil.map((u) => `${u.k}:${u.wert}`).sort().join(",")
 
 /** Die Vorlage für die Fehlerausgabe (Format: Factory-Seite docs/agent-harness.md §3a). */
 const vorlage = (zeilen) =>
-  `${zeilen.abnahme}: head=<sha> durchgaenge=<n> urteil=K1:erfuellt,…   |   ${zeilen.abnahme}: entfaellt — <Grund>`;
+  `${zeilen.abnahme}: head=<sha> durchgaenge=<n> urteil=K1:erfuellt,…   |   ${zeilen.abnahme}: entfaellt — <Grund>   |   Größenstufe S: ${zeilen.abnahme}: entfaellt — klein: <Begründung>`;
 
 /** Urteil je Kriterium gegen die Kriterien des Tickets (`[{k, nachMerge}]`) und gegen `erfuellt`; `nach-merge` gilt nur an einem Nach-Merge-Kriterium. */
 function bewerteUrteil(urteil, liste, nachMerge) {
@@ -67,20 +70,25 @@ function bewerteUrteil(urteil, liste, nachMerge) {
   return fehler;
 }
 
-/** Cap-Regel und head-Regel (`abnahmeHead`: {bekannt, imSlice, nachReviewHead, konfliktMerges, aenderungsCommits}). */
-function bewerteHead(a, review, abnahmeHead) {
-  const fehler = [];
-  if (!review || !Number.isInteger(review.runden)) {
-    fehler.push("Review-Zeile fehlt oder runden ist keine Zahl: die Abnahme zählt gegen das Cap der Review-Pässe.");
-  } else if (a.durchgaenge > review.runden) {
-    fehler.push(
-      `durchgaenge=${a.durchgaenge} ist größer als runden=${review.runden}: jeder Abnahme-Durchgang nach der Konvergenz zählt als Pass, ` +
-        `die Review-Zeile muss runden >= durchgaenge tragen (Cap ${MAX_REVIEW_PAESSE} Pässe, darüber nur mit Zusatzpass).`,
-    );
-  }
+/** Cap-Regel: die Review-Zeile trägt `runden` und deckt `durchgaenge` der Abnahme. */
+function bewerteCap(a, review) {
+  if (!review || !Number.isInteger(review.runden)) return ["Review-Zeile fehlt oder runden ist keine Zahl: die Abnahme zählt gegen das Cap der Review-Pässe."];
+  if (a.durchgaenge <= review.runden) return [];
+  return [
+    `durchgaenge=${a.durchgaenge} ist größer als runden=${review.runden}: jeder Abnahme-Durchgang nach der Konvergenz zählt als Pass, ` +
+      `die Review-Zeile muss runden >= durchgaenge tragen (Cap ${MAX_REVIEW_PAESSE} Pässe, darüber nur mit Zusatzpass).`,
+  ];
+}
+
+/**
+ * Cap-Regel und head-Regel (`abnahmeHead`: {bekannt, imSlice, nachReviewHead, konfliktMerges, aenderungsCommits}).
+ * Mit `reviewOverride` (gültige Review-Override-Zeile im Slice) entfallen Review-Zeile, Cap und der Vergleich mit dem Review-head; die übrigen head-Regeln gelten weiter.
+ */
+function bewerteHead(a, review, abnahmeHead, reviewOverride = false) {
+  const fehler = reviewOverride ? [] : bewerteCap(a, review);
   if (!abnahmeHead.bekannt) return [...fehler, `Abnahme: head=${a.head} ist kein bekannter Commit.`];
   if (!abnahmeHead.imSlice) return [...fehler, `Abnahme: head=${a.head} liegt nicht im Slice dieses PR.`];
-  if (review?.head && !abnahmeHead.nachReviewHead) fehler.push(`Abnahme: head=${a.head} ist kein Nachfahre des Review-head ${review.head}.`);
+  if (!reviewOverride && review?.head && !abnahmeHead.nachReviewHead) fehler.push(`Abnahme: head=${a.head} ist kein Nachfahre des Review-head ${review.head}.`);
   for (const sha of abnahmeHead.konfliktMerges ?? []) fehler.push(`Konflikt-Merge ${sha} nach dem Abnahme-head: Auflösung ungeprüft.`);
   for (const c of abnahmeHead.aenderungsCommits ?? []) fehler.push(`Commit ${c.sha} nach dem Abnahme-head ändert Dateien (${c.dateien.join(", ")}): erneut abnehmen.`);
   return fehler;
@@ -97,20 +105,33 @@ function bewerteSpur(a, marker) {
   return fehler;
 }
 
+/** `entfaellt` bei einem Ticket mit Kriterien: nur `klein: <Begründung>` bei berechneter Größenstufe S (factory#271). Pure. */
+function bewerteEntfaellt(a, ticket, stufe, zeilen) {
+  const klein = kleinGrund(a.grund);
+  if (klein?.art === "klein" && stufe === "S") return [];
+  const ausnahme = klein ? ` (die Ausnahme "entfaellt — klein: <Begründung>" gilt nur bei Größenstufe S mit Begründung; berechnet aus dem Diff: ${stufe})` : "";
+  return [`${zeilen.abnahme}: entfaellt ist bei Ticket #${ticket.nr} mit ${ticket.kriterien.length} Akzeptanzkriterien nicht erlaubt${ausnahme}.`];
+}
+
 /**
  * Bewertet den Abnahme-Nachweis; liefert `fehler[]` (leer = grün). Pur.
+ * `reviewOverride` (bool): eine gültige Review-Override-Zeile steht im Slice, Cap- und Review-head-Vergleich entfallen.
+ * `stufe` (`"S"` | `"voll"`, Standard `voll`): die aus dem Diff berechnete Größenstufe, nur für `entfaellt — klein: …` relevant.
  * `ticket` = `{nr, kriterien: <Liste aus kriterien()>, nachMerge: <Präfix aus sprache.spezifikation>}` oder `null` (kein Ticket verknüpft), `marker` = Ergebnis von `vertrauterMarker`.
  */
-export function bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen }) {
+export function bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, reviewOverride = false, stufe = "voll" }) {
   const a = nachweis.abnahme;
   if (!a) return [`${zeilen.abnahme}: Zeile fehlt. Ablauf: node scripts/abnahme.mjs kriterien <nr>; Vorlage: ${vorlage(zeilen)}`];
   if (a.art === "ungueltig") return [`${zeilen.abnahme}: ungültig (${a.grund ? `${a.grund}: ` : ""}${a.zeile}). Vorlage: ${vorlage(zeilen)}`];
   if (a.art === "entfaellt") {
-    return ticket && ticket.kriterien.length > 0 ? [`${zeilen.abnahme}: entfaellt ist bei Ticket #${ticket.nr} mit ${ticket.kriterien.length} Akzeptanzkriterien nicht erlaubt.`] : [];
+    return ticket && ticket.kriterien.length > 0 ? bewerteEntfaellt(a, ticket, stufe, zeilen) : [];
   }
   if (!ticket) return [`${zeilen.abnahme}: ein Urteil braucht ein verknüpftes Ticket (Schließ-Referenz im PR-Body).`];
-  return [...bewerteUrteil(a.urteil, ticket.kriterien, ticket.nachMerge), ...bewerteHead(a, nachweis.review, abnahmeHead), ...bewerteSpur(a, marker)];
+  return [...bewerteUrteil(a.urteil, ticket.kriterien, ticket.nachMerge), ...bewerteHead(a, nachweis.review, abnahmeHead, reviewOverride), ...bewerteSpur(a, marker)];
 }
+
+/** Ausgabe bei aktivem Review-Override (L24a): was der Override an der Abnahme-Prüfung auslässt. */
+const REVIEW_OVERRIDE_HINWEIS = "Review-Override: Cap- und head-Vergleich entfallen";
 
 const gitDefault = (args) => execFileSync("git", args, { encoding: "utf8" });
 
@@ -146,17 +167,20 @@ export function checkAbnahmeNachweis({ runGit, gh = (a) => ghJson(a), env = proc
   const base = resolveBase(git, env);
   if (!base) return { ok: false, fehler: ["Keine Vergleichs-Basis auflösbar (flacher Checkout?): Abnahme-Nachweis nicht prüfbar."], invalid: [] };
   let fehler;
+  let rov = { reason: null, invalid: [] };
   let entwurf = false; // erst der Live-Abruf (oder der Ereigniswert ohne PR-Nummer) setzt ihn; ein Fehler davor bleibt streng
   try {
     if (git(["rev-parse", "HEAD"]).trim() === base) return { ok: true, skipped: true, fehler: [], invalid: [] };
     const ov = sliceOverride(git, base, zeilen.abnahmeOverride);
     if (ov.reason !== null) return { ok: true, override: ov.reason, overrideKey: zeilen.abnahmeOverride, fehler: [], invalid: ov.invalid };
+    rov = sliceOverride(git, base, zeilen.reviewOverride);
     entwurf = entwurfLive({ gh, env, repo: repoVon(env, config) });
-    fehler = pruefe({ git, gh, env, config, zeilen, base });
+    fehler = pruefe({ git, gh, env, config, zeilen, base, reviewOverride: rov.reason !== null });
   } catch (e) {
     fehler = [`Fehler beim Prüfen des Abnahme-Nachweises (git/gh): ${fehlerText(e)}`];
   }
-  return { ok: fehler.length === 0 || entwurf, entwurf: entwurf && fehler.length > 0, fehler, invalid: [] };
+  const hinweise = rov.reason === null ? [] : [REVIEW_OVERRIDE_HINWEIS];
+  return { ok: fehler.length === 0 || entwurf, entwurf: entwurf && fehler.length > 0, fehler, hinweise, invalid: rov.invalid };
 }
 
 const repoVon = (env, config) => env.GITHUB_REPOSITORY || config.repo;
@@ -178,8 +202,12 @@ export function entwurfLive({ gh, env, repo }) {
   return pr.draft;
 }
 
+/** Die Größenstufe, nur wenn die Abnahme-Zeile `entfaellt` lautet (nur dort zählt sie, factory#271); sonst `voll`. */
+const stufeFuerEntfaellt = (nachweis, git, base, config) =>
+  nachweis.abnahme?.art === "entfaellt" ? groessenstufeAusGit(git, base, "HEAD", { ladeRisiko: () => risikoMusterAus(config) }).stufe : "voll";
+
 /** Der eigentliche Ablauf nach Override-Prüfung; wirft bei git- oder gh-Fehlern (der Aufrufer wertet das als rot). */
-function pruefe({ git, gh, env, config, zeilen, base }) {
+function pruefe({ git, gh, env, config, zeilen, base, reviewOverride }) {
   const repo = repoVon(env, config);
   const { owner } = zerlegeRepo(repo);
   const nachweis = parseNachweis(git(["log", "--reverse", "--format=%B", `${base}..HEAD`]), zeilen);
@@ -196,10 +224,10 @@ function pruefe({ git, gh, env, config, zeilen, base }) {
   let marker = null;
   if (nachweis.abnahme?.art === "urteil") {
     // Ohne PR-Nummer bleibt es rot (fail-closed), zeigt aber vorher die Head-Fehler (Konflikt-Merge hinter der Abnahme), damit der lokale Lauf sie sieht.
-    if (!/^\d+$/.test(umgebungsWert(env, "FACTORY_PR_NUMBER") ?? "")) return [...bewerteHead(nachweis.abnahme, nachweis.review, abnahmeHead), "PR-Nummer fehlt (FACTORY_PR_NUMBER): die Spur ist nicht prüfbar."];
+    if (!/^\d+$/.test(umgebungsWert(env, "FACTORY_PR_NUMBER") ?? "")) return [...bewerteHead(nachweis.abnahme, nachweis.review, abnahmeHead, reviewOverride), "PR-Nummer fehlt (FACTORY_PR_NUMBER): die Spur ist nicht prüfbar."];
     marker = vertrauterMarker(issueKommentare(umgebungsWert(env, "FACTORY_PR_NUMBER"), gh, repo), owner, zeilen);
   }
-  return bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen });
+  return bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, reviewOverride, stufe: stufeFuerEntfaellt(nachweis, git, base, config) });
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -220,6 +248,7 @@ function main(argv = process.argv.slice(2)) {
     return;
   }
   meldeUngueltigeOverrides(r.invalid);
+  for (const h of r.hinweise ?? []) console.log(`• ${h}`);
   if (r.entwurf) {
     console.log("• Entwurf, nur Bericht (maßgeblich ist der Lauf nach ready_for_review):");
     for (const f of r.fehler) console.log(`  - ${f}`);

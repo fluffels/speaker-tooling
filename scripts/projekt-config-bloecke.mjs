@@ -1,6 +1,6 @@
 // Form-Prüfer der Blöcke der Projekt-Config (factory#162 L22): reine Funktionen `pruefeX(wert) → Fehlerliste` für struktur, sprache, ausnahmen, datengroesse, gates, factoryLinks, labels, skills,
 // berechtigungen, sandbox und die Literal-Objekte. `projekt-config-lib.mjs` importiert sie (`pruefeProjektConfig`, Accessoren); dieses Modul importiert nichts aus ihr (Blatt, kein Zyklus).
-// Nur Blatt-Importe: `relativ-pfad.mjs` (importfrei), `pfad-glob.mjs` (nur relativ-pfad), `quellwurzeln-lib.mjs` (nur Builtins, pfad-glob und relativ-pfad) und `spezifikation-lib.mjs` (zieht `markdown.mjs` und `repo-form.mjs`, nur Builtins).
+// Nur Blatt-Importe: `regex-lib.mjs` (nur Builtins), `relativ-pfad.mjs` (importfrei), `pfad-glob.mjs` (nur relativ-pfad), `quellwurzeln-lib.mjs` (nur Builtins, pfad-glob und relativ-pfad) und `spezifikation-lib.mjs` (zieht `markdown.mjs` und `repo-form.mjs`, nur Builtins).
 import { istRelativPosix } from "./relativ-pfad.mjs";
 import { GATE_FORM } from "./regex-lib.mjs";
 import { globMaengel } from "./pfad-glob.mjs";
@@ -79,8 +79,6 @@ function eintragMaengel(e, wo, gesehen) {
   return fehler;
 }
 
-/** Standard-Endungen des Datenbudgets (`datengroesse.endungen`): ein Format, kein Projektwort. */
-export const DATEN_STANDARD_ENDUNGEN = [".json"];
 const DATEN_SCHLUESSEL = ["pfade", "budget", "endungen", "hinweis", "deckel"];
 const istPositivGanz = (v) => Number.isInteger(v) && v > 0;
 
@@ -195,7 +193,68 @@ export function pruefeBerechtigungen(b) {
   return fehler;
 }
 
+/** Schwellenfelder des optionalen Blocks `langfuseWochenbericht` (factory#313): Name → Prüfung (je Feld einzeln optional, kein Default). */
+const WOCHENBERICHT_FELDER = {
+  erfassungLueckenMax: [(v) => Number.isInteger(v) && v >= 0, "eine Ganzzahl ab 0"],
+  kostenAnstiegProzent: [(v) => Number.isFinite(v) && v >= 0, "eine Zahl ab 0"],
+  unzugeordnetProzent: [(v) => Number.isFinite(v) && v >= 0, "eine Zahl ab 0"],
+  wochenOhneLaufMax: [(v) => Number.isInteger(v) && v >= 1, "eine Ganzzahl ab 1"],
+};
+
+/** Pur: prüft den optionalen Block `langfuseWochenbericht` (Schwellen des Wochenberichts, factory#313; fehlt er, ist nichts zu prüfen). */
+export function pruefeLangfuseWochenbericht(b) {
+  if (b === undefined) return [];
+  if (!istObjekt(b)) return ["langfuseWochenbericht muss ein Objekt mit den Schwellen " + Object.keys(WOCHENBERICHT_FELDER).join(", ") + " sein"];
+  return Object.keys(b).flatMap((k) => {
+    const feld = WOCHENBERICHT_FELDER[k];
+    if (!feld) return [`langfuseWochenbericht.${k} ist kein bekannter Schlüssel (erlaubt: ${Object.keys(WOCHENBERICHT_FELDER).join(", ")})`];
+    return feld[0](b[k]) ? [] : [`langfuseWochenbericht.${k} muss ${feld[1]} sein`];
+  });
+}
+
+/** Pur: prüft den optionalen Block `risiko` (factory#333): `hoch` ist eine nicht-leere Liste von Pfadmustern (POSIX, Syntax der Schutzliste); fehlt der Block, gilt die Standardliste. */
+export function pruefeRisiko(b) {
+  if (b === undefined) return [];
+  if (!istObjekt(b)) return ["risiko muss ein Objekt mit dem Schlüssel hoch sein"];
+  const fehler = Object.keys(b).filter((k) => k !== "hoch").map((k) => `risiko.${k} ist kein bekannter Schlüssel (erlaubt: hoch)`);
+  if (!Array.isArray(b.hoch) || b.hoch.length === 0) {
+    return [...fehler, "risiko.hoch muss eine nicht-leere Liste von Pfadmustern sein (ohne den Block gilt die Standardliste; leer schaltet die Klasse hoch nicht ab)"];
+  }
+  b.hoch.forEach((m, i) => {
+    if (!istText(m)) fehler.push(`risiko.hoch[${i}] muss ein nicht-leerer Text sein`);
+    else if (m.includes(String.fromCharCode(92))) fehler.push(`risiko.hoch[${i}] enthält einen Backslash (Pfadmuster sind POSIX mit /)`);
+  });
+  return fehler;
+}
+
 const SANDBOX_KEYS = ["allowedDomains", "envVars"];
+
+const VORPRUEFUNG_KEYS = ["befehle", "userScopeServer"];
+
+/** Pur: Fehler der optionalen Liste `vorpruefung.userScopeServer` (Servernamen `[\w-]+`). */
+function pruefeUserScopeServer(liste) {
+  if (liste === undefined) return [];
+  if (!Array.isArray(liste)) return ["vorpruefung.userScopeServer muss eine Liste von Servernamen sein"];
+  return liste.flatMap((s, i) => (typeof s === "string" && /^[\w-]+$/.test(s) ? [] : [`vorpruefung.userScopeServer[${i}] muss ein Servername sein (nicht-leerer String aus Buchstaben, Ziffern, _ und -)`]));
+}
+
+/** Pur: prüft den optionalen Block `vorpruefung` (Form, factory#260; fehlt er, ist nichts zu prüfen): `befehle` ist eine Liste `{ name, befehl }` mit eindeutigem Namen und einer nicht-leeren Liste von Strings (Programm, dann Argumente; kein Shell-Text); `userScopeServer` ist eine Liste von Servernamen. */
+export function pruefeVorpruefung(b) {
+  if (b === undefined) return [];
+  if (!istObjekt(b)) return ["vorpruefung muss ein Objekt mit der Liste befehle sein"];
+  const fehler = [...Object.keys(b).filter((k) => !VORPRUEFUNG_KEYS.includes(k)).map((k) => `vorpruefung.${k} ist kein bekannter Schlüssel (erlaubt: ${VORPRUEFUNG_KEYS.join(", ")})`), ...pruefeUserScopeServer(b.userScopeServer)];
+  if (b.befehle === undefined) return fehler;
+  if (!Array.isArray(b.befehle)) return [...fehler, "vorpruefung.befehle muss eine Liste von { name, befehl } sein"];
+  const namen = new Set();
+  b.befehle.forEach((e, i) => {
+    const wo = `vorpruefung.befehle[${i}]`;
+    if (!istObjekt(e) || !istText(e.name)) return fehler.push(`${wo}.name muss ein nicht-leerer String sein`);
+    if (!Array.isArray(e.befehl) || e.befehl.length === 0 || !e.befehl.every(istText)) fehler.push(`${wo}.befehl muss eine nicht-leere Liste von Strings sein (Programm, dann Argumente)`);
+    if (namen.has(e.name)) fehler.push(`${wo}.name „${e.name}“ steht doppelt`);
+    namen.add(e.name);
+  });
+  return fehler;
+}
 
 /**
  * Pur: prüft den Block `sandbox` (Form, #1888): nur die Listen allowedDomains (Strings ohne Leerraum) und envVars (Objekte `{ name, mode }` mit `mode: "deny"`), je Liste ohne Duplikat (Name).

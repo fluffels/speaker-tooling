@@ -11,7 +11,7 @@ Der Prototyp umfasst Setup, Rollenquellen und Belegdiagnose. Die vollständige U
 | Phase | Codex-Rolle | Fachliche Quelle |
 |---|---|---|
 | Planung | Name aus `agenten.planer` | `factory-planer.md` |
-| Umsetzung / Gruppen | `agenten.umsetzer` / `agenten.gruppe` | `factory-umsetzer.md` / `factory-gruppe.md` |
+| Umsetzung / Gruppen | `agenten.umsetzer` / `agenten.gruppe` | `factory-umsetzer.md` (Kern; bedingte Dateien `.agents/skills/factory/plattform-windows.md` und `umsetzer-*.md`, die der Kern bei Eintritt ihrer Bedingung nennt, gehören zur Rolle) / `factory-gruppe.md` |
 | Architektur, Requirements, Tests | je unabhängiger Auftrag an `agenten.lens` | `factory-lens.md`, Skill `review-lenses` |
 | Exploration | `explore` | `explore.md` |
 | Szenarien / Abnahme | `holdout-szenario` / `holdout-abnahme` | gleichnamige Dateien |
@@ -19,7 +19,7 @@ Der Prototyp umfasst Setup, Rollenquellen und Belegdiagnose. Die vollständige U
 
 Eine erzeugte Rolle ist erst nach erneutem Laden und tatsächlicher Discovery nutzbar. Ein Spawn von `default` belegt keine Custom-Agent-Datei. Planung und Lenses verwenden `high`, Umsetzung und Explore `medium`; das Modell wird geerbt und im Probebericht anhand der Laufmetadaten benannt. Claude-Aliase haben keine belegte Codex-Entsprechung. Der Hauptagent übergibt den fachlichen Rollenvertrag aus der gemeinsamen Quelle; der Szenario-Agent erhält nur diesen Vertrag und das Ticket, keine zusätzliche Quellenbeschaffung.
 
-Alle Rollen reduzieren `apps`, `plugins`, `memories` und `request_permissions_tool`; der Szenario-Agent zusätzlich `shell_tool`. Die Lens behält die für isolierte Sabotage nötigen Werkzeuge. Diese Reduktionen sind **keine** vollständige Tool-Allowlist, Read-only-Sandbox oder Quarantäne. `sandbox_mode`, `approval_policy` und `mcp_servers` lassen sich durch eine Custom-Agent-Datei nicht unabhängig von der Elternsession überschreiben. Eine TOML-Datei oder ein Prompt-Verbot allein belegt keine Rechteisolation.
+Alle Rollen reduzieren `apps`, `plugins`, `memories` und `request_permissions_tool`; der Szenario-Agent zusätzlich `shell_tool`. Die Lens behält die für isolierte Sabotage nötigen Werkzeuge. **Read-Pflicht der Rollenquellen:** wo die Claude-Skills `Read` verlangen, entspricht in Codex `exec_command` mit einem Node-Lesebefehl; Pfad- und Holdout-Grenzen bleiben unverändert, Shell-Lesen ist kein Quarantäne-Grund (die generierten Rollentexte nennen das; die praktische Prüfung gehört zur Abnahme factory#249). Diese Reduktionen sind **keine** vollständige Tool-Allowlist, Read-only-Sandbox oder Quarantäne. `sandbox_mode`, `approval_policy` und `mcp_servers` lassen sich durch eine Custom-Agent-Datei nicht unabhängig von der Elternsession überschreiben. Eine TOML-Datei oder ein Prompt-Verbot allein belegt keine Rechteisolation.
 
 ## Konkrete Aufrufe
 
@@ -58,6 +58,8 @@ env_http_headers = { Authorization = "LANGFUSE_MCP_AUTHORIZATION" }
 
 Beim direkten Langfuse-Endpunkt ist das ein Basic-Header mit Public-/Secret-Key. Der Header und seine Base64-Darstellung sind secretäquivalent. Sie gehören weder ins Repo noch in Logs, Ausgabe oder Prompts. Der Generator liest und erzeugt sie nicht und greift nicht auf Key-Dateien zu. Das Bereitstellen der Authentifizierung durch den MCP-Host ist kein Agentenskript zum Auslesen des Langfuse-Secret-Keys; die Regel aus `AGENTS.md` bleibt bestehen. Daraus folgt **keine** Isolation gegenüber geerbter Shell, Umgebungsvariablen oder privaten MCP-Verbindungen. Die konkrete sichere Bereitstellung und der echte authentifizierte MCP-Aufruf bleiben zu prüfen.
 
+**Modus `--langfuse-auth host`:** lässt `env_http_headers` weg (Standard `env`, ungültiger Wert Exit 2); `required = true` und die Lese-Toolliste bleiben. Der MCP-Host liefert dann die Anmeldung selbst. Die Wirkung ist eine **Beobachtung aus einem Bezieher-Pilot** und in der Fabrik nicht geprüft.
+
 Anschließend in einer neu geladenen, vertrauenswürdig eingerichteten Sitzung `codex --strict-config doctor --summary`, tatsächliche Rollen-Discovery und echte MCP-Aufrufe prüfen. Doctor oder eine Serverliste allein belegen keine nutzbare Verbindung. Generierte Konfiguration bleibt lokal; im Konsumenten kommen die Generatoren über das Besitz-Manifest. Ein Konsumenten-Sync gehört nicht zum Setup.
 
 ## Windows-Probe
@@ -90,7 +92,7 @@ Hook-Fehler und Timeouts können ohne Werkzeugblockade enden. Dokumentierte Matc
 
 ## Vorprüfung und Nachweisformat
 
-`node scripts/codex-vorpruefung.mjs [--belege <JSON-Datei>]` liest ausschließlich. Exit 2 bedeutet Aufruffehler, Exit 1 den gesperrten Einstieg. Weder Claim noch Umsetzung werden gestartet. Sie meldet außerdem veraltete oder verwaiste lokale Rollen-Dateien in `.codex/agents/` (Vergleich mit dem Setup-Soll; Behebung: Datei löschen, `node scripts/codex-setup.mjs --langfuse-url <URL> --write`). Vollständige Offline-Daten heben diese Sperre nicht auf; JSON ist selbst attestierbar und keine signierte Laufzeitattestierung.
+`node scripts/codex-vorpruefung.mjs [--belege <JSON-Datei>]` ändert nichts (die Werkzeug-Vorprüfung führt nur die deklarierten Prüfbefehle aus). Exit 2 bedeutet Aufruffehler, Exit 1 den gesperrten Einstieg. Weder Claim noch Umsetzung werden gestartet. Sie meldet außerdem veraltete oder verwaiste lokale Rollen-Dateien in `.codex/agents/` (Vergleich mit dem Setup-Soll; Behebung: Datei löschen, `node scripts/codex-setup.mjs --langfuse-url <URL> --write`). Sie hängt außerdem die Mängel der Werkzeug-Vorprüfung (`node scripts/werkzeug-vorpruefung.mjs`: MCP-Server, Node-Version, Projekt-Befehle) als Zeilen `Werkzeug-Vorprüfung: …` an `maengel` an; die MCP-Verbindung selbst prüft Codex mit `required = true` nativ. Vollständige Offline-Daten heben diese Sperre nicht auf; JSON ist selbst attestierbar und keine signierte Laufzeitattestierung.
 
 Die Datei enthält `version`, `sessionId`, tatsächlich entdeckte `rollen`, erfolgreich aufgerufene MCP-Server in `tools` sowie rohe Langfuse-`observations`. Jede Observation braucht ID, dieselbe Session, Repo-Tag `project:<Repositoryname>` aus der Projektkonfiguration, Typ, Metadaten und für Generations gültigen Verbrauch (`input`, `output`). Identische Wiederholungen einer Observation-ID zählen einmal; widersprüchliche Zeilen derselben ID werden verworfen und diagnostiziert. Haupt-/Unteragenten haben unterschiedliche nichtleere `agent_id`; `parent_thread_id` muss direkt oder transitiv über etwa den Umsetzer zum eindeutigen Hauptagenten führen. Zyklen, unverbundene Ketten und widersprüchliche Eltern-/Rollenidentitäten gelten auch an der Root nicht als Beleg.
 
@@ -110,7 +112,7 @@ Die Prüfung muss anhand echter Laufdaten erfolgen; die Liste selbst erteilt kei
 
 ## Laufzeit-Verträge
 
-`test/harness/laufzeit-vertraege.test.ts` hält Claude und Codex hermetisch in `verify` zusammen: Skill-Zeiger, Rollenquellen, Hook-Tabelle (heute alle Hooks ohne Codex-Adapter, Grenze factory#84) und die AGENTS.md-Größe gegen das Codex-Standardlimit. Ein echter Codex-Lauf ist in CI nicht möglich und gehört zur Gesamtabnahme factory#86.
+`test/harness/laufzeit-vertraege.test.ts` hält Claude und Codex hermetisch in `verify` zusammen: Skill-Zeiger, Rollenquellen, Hook-Tabelle (heute alle Hooks ohne Codex-Adapter, Grenze factory#249) und die AGENTS.md-Größe gegen das Codex-Standardlimit. Ein echter Codex-Lauf ist in CI nicht möglich und gehört zur Gesamtabnahme factory#249.
 
 ## Quellen
 

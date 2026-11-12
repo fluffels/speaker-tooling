@@ -30,7 +30,7 @@ Zuerst `git -C <worktree> status --porcelain` (muss leer sein) und `git -C <work
 ## Wie du prüfst
 
 - **Beobachtung statt Lektüre.** Du liest weder den Diff noch Quellcode zur Urteilsbildung noch den Plan oder den PR-Text. Erlaubt sind Aufrufe der öffentlichen Schnittstellen im Worktree: CLI-Skripte mit ihren Argumenten, exportierte Funktionen per absolutem Import aus einem Probe-Skript, `node scripts/gate-befehl.mjs testGezielt <datei>` im Worktree, und die Oberfläche im Browser.
-- **Nichts im Worktree schreiben.** Probe-Skripte und Ausgaben legst du nur im übergebenen Scratchpad an (`Write` gilt nur dort; der Frontmatter-Hook `scripts/holdout-guard.mjs` lehnt jedes `Write` außerhalb des Temp-Verzeichnisses ab, Schreiben per Shell ins Repo fängt die Worktree-Probe der Auswertung). Ignorierte Caches des Werkzeugs zählen nicht als Änderung.
+- **Nichts im Worktree schreiben.** Probe-Skripte und Ausgaben legst du nur im übergebenen Scratchpad an (`Write` gilt nur dort; der Frontmatter-Hook `scripts/holdout-guard.mjs` lehnt jedes `Write` außerhalb des Temp-Verzeichnisses (unter POSIX auch `/tmp`) ab, Schreiben per Shell ins Repo fängt die Worktree-Probe der Auswertung). Ignorierte Caches des Werkzeugs zählen nicht als Änderung.
 - **Gegenprobe (Sabotage) nie im übergebenen Worktree und nie mit verlinktem Abhängigkeitsordner (etwa `node_modules`).** Willst du beweisen, dass ein Test oder Gate rot wird, arbeite in einer Kopie im Scratchpad mit eigener Installation (`node scripts/gate-befehl.mjs install`) oder mutiere zur Laufzeit (Probe-Skript, das den Wert im Speicher verfälscht). Ein `node_modules` als Junction oder Symlink ist verboten: ein späteres Entfernen der Kopie leert sonst das echte.
 - **Kein `rm -rf`, kein Scratch-Aufräumen.** `Bash(rm -rf:*)` ist in `deny` gesperrt (auch mit Variablen); Probe-Dateien bleiben im Scratchpad liegen, bei jeder Probe ein neuer literaler Pfad. Den eigenen Dev-Server beendest du per PID (`taskkill //PID <pid> //T //F`); kein `git checkout`, `git restore` und `git reset`.
 - **Keine Außenwirkung.** Keine Schreibbefehle von `gh`, kein `git commit/push/checkout/reset/stash`, kein `abnahme.mjs auswerten` (das macht der Hauptchat).
@@ -44,8 +44,11 @@ Zuerst `git -C <worktree> status --porcelain` (muss leer sein) und `git -C <work
 Erste Zeile `ABNAHME #<nr> · holdout-abnahme` (`<nr>` ist die Ticketnummer aus der Zeile `Ticket #<nr>` des Auftrags, nie die PR-Nummer), dann je Kriterium genau eine Zeile:
 
 ```
-K<i>: erfuellt | nicht-erfuellt | nicht-pruefbar — <Beleg>
+K<i>: erfuellt | nicht-pruefbar — <Beleg>
+K<i>: nicht-erfuellt ursache=kriterium|szenario|umsetzung — <Beleg>
 ```
+
+Bei `nicht-erfuellt` ist `ursache=` Pflicht, bei `erfuellt` und `nicht-pruefbar` ein Fehler (der Bericht ist ungültig). Wähle die Klasse nach der Ursache der Abweichung: das beobachtete Verhalten widerspricht dem Kriterium → `umsetzung`; das Szenario prüft über das Kriterium hinaus → `szenario`; das Kriterium lässt die beobachtete Lesart zu, gemeint war eine andere → `kriterium`.
 
 Der Beleg nennt das beobachtete Verhalten (Aufruf, Ausgabe, Zustand), nie den Wortlaut der Szenarien. `nicht-erfuellt` nur, wenn du das Gegenteil beobachtet hast; `nicht-pruefbar` **nur bei einem Spezifikationsmangel** (das Kriterium ist so unklar oder widersprüchlich, dass keine Beobachtung es entscheidet). Ein Werkzeugproblem (Server startet nicht, Browser fehlt, Port belegt, Aufruf bricht ab) ist kein Spezifikationsmangel: Dann lautet die erste Zeile `ABNAHME-ABGEBROCHEN #<nr> · holdout-abnahme` mit einer Zeile `GRUND: <was nicht ging>`; der Hauptchat versucht es einmal neu.
 

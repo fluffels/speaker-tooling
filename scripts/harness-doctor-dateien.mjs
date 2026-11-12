@@ -16,6 +16,11 @@
  *   Workflow-Datei (Flow-Form, Anker, Alias, Tag, Merge-Schlüssel …), ein fehlender Ruleset-Spiegel oder eine leere Soll-Liste machen den Punkt nicht prüfbar. Spiegel, Workflows und Soll-Liste liest `pruefLauf` einmal und reicht sie herein.
  *   Der Punkt `Meldestelle` (factory#208) gehört nicht hierher: er braucht `gh` und steht in harness-doctor-meldestelle.mjs.
  *
+ *   `Code-Scanning-Quellen` (factory#339): jedes Werkzeug aus `spiegel.codeScanning` hat eine Workflow-Quelle (CodeQL: `uses: github/codeql-action/analyze@`, jedes andere Werkzeug: `uses: github/codeql-action/upload-sarif@` in einer Datei, die den Namen als Wort nennt);
+ *   ohne Quelle Lücke, nur CodeQL ohne Workflow nicht prüfbar (Default-Setup serverseitig). Grenze: Drittaktionen, ein SARIF-Upload per API und eine gequotete `uses:`-Form erkennt der Punkt nicht. Spiegel und Workflows reicht `pruefLauf` herein wie bei `Required-Check-Quellen`.
+ *
+ *   `Workflow-Auslöser`: jeder Name in `on.workflow_run.workflows` ist der `name:` eines vorhandenen Workflows (Leser `blockformAusloeser`); eine nicht lesbare Form (`on:` als Flow-Mapping, Anker, Alias, Tag) macht den Punkt nicht prüfbar mit `datei:zeile`.
+ *
  * Nur Node-Builtins (der Wochenlauf hat kein `npm ci`); `git` und `existiert` sind injizierbar (Tests). Fehlt Git oder der Index, ist `Zeilenenden`
  * nicht prüfbar, `Root-Kontextdatei` wird trotzdem bewertet. Grenze: ein CI-Checkout sieht ungetrackte Dateien nicht, nur ein lokales `--pruefen`.
  */
@@ -26,7 +31,7 @@ import { markerEnde, markerStart, PROJEKT_BLOCK_ENDE, PROJEKT_BLOCK_START } from
 import { gut, luecke, nichtPruefbar } from "./harness-doctor-ergebnis.mjs";
 import { labelAus, ladeProjektConfig, langfuseZiel, PROJEKT_CONFIG, ROLLEN_PFADE, zielRepoFuer } from "./projekt-config-lib.mjs";
 import { gleichesRepo } from "./repo-form.mjs";
-import { quellenJeKontext } from "./workflow-blockform.mjs";
+import { blockformAusloeser, quellenJeKontext } from "./workflow-blockform.mjs";
 import { STANDARD_ENDUNGEN } from "./quellwurzeln-lib.mjs";
 import { istBezieher } from "./sync-stand-lib.mjs";
 import { QUELL_VERZEICHNIS, ZEIGER_WURZEL } from "./skill-pfade.mjs";
@@ -158,7 +163,7 @@ export const PROJEKTDATEIEN = Object.freeze([
   { pfad: "package.json", fix: `scripts und devDependencies der Quelle übernehmen, dann \`npm install\`, Lockfile committen` },
   { pfad: "tsconfig.json" },
   { pfad: "eslint.config.js" },
-  { pfad: "eslint-suppressions.json", fix: `danach \`npm run lint:prune\`` },
+  { pfad: "eslint-suppressions.json", fix: `danach \`npx eslint . --prune-suppressions\`` },
   { pfad: "vite.config.ts" },
   { pfad: "scripts/docs-gen/config.json", fix: `schichten.layers auf die eigene Schicht-Definition zeigen lassen (Vorlage: scripts/layers.cjs der Quelle)` },
   { pfad: ".github/workflows/ci.yml" },
@@ -178,7 +183,7 @@ export function projektdateienPunkt(rootDir, existiert) {
 /** Dateien des Langfuse-Takts: der Workflow (Ring `kern-nach-entkopplung`) und das Skript; ohne sie läuft weder Status-Ticket noch Sammelticket „Langfuse-Befunde (gesammelt)“. */
 export const LANGFUSE_TAKT_DATEIEN = Object.freeze([".github/workflows/board-takt.yml", "scripts/langfuse-takt.mjs"]);
 
-const TAKT_FIX = "den Sync erneut ausführen (`npm run factory:sync -- --quelle <Factory-Checkout> --tag <Tag>`, Anleitung: Seite docs/erstbezug.md des Factory-Repos): der Sync liefert beide Dateien, `.github/workflows/board-takt.yml` liegt im Ring kern-nach-entkopplung und gehört damit zum Besitz, den jeder Bezieher bekommt";
+const TAKT_FIX = "den Sync erneut ausführen (`node scripts/factory-sync.mjs --quelle <Factory-Checkout> --tag <Tag>`, Anleitung: Seite docs/erstbezug.md des Factory-Repos): der Sync liefert beide Dateien, `.github/workflows/board-takt.yml` liegt im Ring kern-nach-entkopplung und gehört damit zum Besitz, den jeder Bezieher bekommt";
 
 /** Die Config mit gefilterten `boards` (Nulleinträge der ungeprüften Config tolerieren), für `zielRepoFuer` und `langfuseZiel`. */
 function ohneNullBoards(config) {
@@ -248,8 +253,11 @@ export function gezielterTestPunkt(config) {
 }
 
 /** Punkt `Required-Check-Quellen` (factory#148): jeder Kontext aus `pflichtChecks` hat genau eine Quelle in `workflows` (`[{ pfad, text }]`). Pur: liest nichts selbst. */
-export function requiredCheckQuellenPunkt({ spiegel, workflows, pflichtChecks }) {
+export function requiredCheckQuellenPunkt({ spiegel, workflows, pflichtChecks, vorAbbruch = false }) {
   const punkt = "Required-Check-Quellen";
+  if (vorAbbruch) {
+    return nichtPruefbar(punkt, "Config bzw. Ruleset-Spiegel nicht geladen (Abbruch oben): die Soll-Liste der Required-Checks ist unbekannt", "erst den Config- bzw. Spiegel-Fehler oben beheben, dann erneut prüfen");
+  }
   if (spiegel === undefined || spiegel === null) {
     return nichtPruefbar(punkt, "kein Ruleset-Spiegel (`rulesetSpiegel` fehlt): die Soll-Liste der Required-Checks ist unbekannt", "`rulesetSpiegel` in der Projekt-Config setzen und die Vorlage `.github/ruleset-main-schutz.json` der Quelle übernehmen (Anleitung: Seite docs/erstbezug.md des Factory-Repos), dann erneut prüfen");
   }
@@ -272,21 +280,91 @@ export function requiredCheckQuellenPunkt({ spiegel, workflows, pflichtChecks })
   return gut(punkt);
 }
 
+const CS_PUNKT = "Code-Scanning-Quellen";
+const CS_FIX = `Sicherheits-Modul wählen (\`module\` in \`${PROJEKT_CONFIG}\`) oder Workflow mit SARIF-Upload ergänzen, sonst das Werkzeug aus Ruleset und Spiegel nehmen (Pre-Flight)`;
+const CS_ANALYZE = "uses: github/codeql-action/analyze@";
+const CS_UPLOAD = "uses: github/codeql-action/upload-sarif@";
+const WORT_ZEICHEN = /[a-z0-9_-]/;
+
+/** Zeilen einer Workflow-Datei, getrimmt, ein führendes `- ` der Listenform entfernt (eine Kommentarzeile `# uses: …` beginnt mit `#` und passt auf kein Muster). */
+const csZeilen = (text) => text.split("\n").map((z) => z.trim().replace(/^- /, ""));
+/** Steht `name` (klein geschrieben) als ganzes Wort in `text` (klein geschrieben)? Wortzeichen sind Buchstaben, Ziffern, `_` und `-`. */
+function alsWort(text, name) {
+  for (let i = text.indexOf(name); i !== -1; i = text.indexOf(name, i + 1)) {
+    if (!WORT_ZEICHEN.test(text[i - 1] ?? " ") && !WORT_ZEICHEN.test(text[i + name.length] ?? " ")) return true;
+  }
+  return false;
+}
+/** Hat `workflows` eine Quelle für das Werkzeug `tool`: `analyze` für CodeQL, sonst `upload-sarif` in einer Datei, die den Namen als Wort nennt? */
+function csQuelle(workflows, tool) {
+  const klein = tool.toLowerCase();
+  return workflows.some((w) => {
+    const zeilen = csZeilen(w.text);
+    if (klein === "codeql") return zeilen.some((z) => z.startsWith(CS_ANALYZE));
+    return zeilen.some((z) => z.startsWith(CS_UPLOAD)) && alsWort(w.text.toLowerCase(), klein);
+  });
+}
+
+/**
+ * Punkt `Code-Scanning-Quellen` (factory#339): jedes Werkzeug aus `spiegel.codeScanning` hat im Repo eine Workflow-Quelle in `workflows` (`[{ pfad, text }]`): CodeQL einen Schritt
+ * `uses: github/codeql-action/analyze@`, jedes andere Werkzeug einen Schritt `uses: github/codeql-action/upload-sarif@` in einer Datei, die den Werkzeugnamen als Wort nennt (Groß-/Kleinschreibung egal).
+ * Ein Werkzeug ohne Quelle ist eine Lücke (das Ruleset wartete ewig auf ein Ergebnis, das nie kommt); nur CodeQL ohne Workflow ist nicht prüfbar, weil das Default-Setup serverseitig läuft. Ohne Spiegel oder
+ * nach Abbruch nicht prüfbar, ein Spiegel ohne `codeScanning` ist OK. Grenze: Drittaktionen, ein SARIF-Upload per API und eine gequotete `uses:`-Form erkennt der Punkt nicht (dann Lücke oder nicht prüfbar, nie still grün). Pur.
+ */
+export function codeScanningQuellenPunkt({ spiegel, workflows, vorAbbruch = false }) {
+  if (vorAbbruch || spiegel === undefined || spiegel === null) {
+    return nichtPruefbar(CS_PUNKT, "Config bzw. Ruleset-Spiegel nicht geladen: die Soll-Liste der Code-Scanning-Werkzeuge ist unbekannt", "erst den Config- bzw. Spiegel-Fehler oben beheben (`rulesetSpiegel` in der Projekt-Config), dann erneut prüfen");
+  }
+  const werkzeuge = (Array.isArray(spiegel.codeScanning) ? spiegel.codeScanning : []).map((e) => e?.tool).filter((t) => typeof t === "string" && t !== "");
+  const ohne = werkzeuge.filter((t) => !csQuelle(workflows ?? [], t));
+  const echt = ohne.filter((t) => t.toLowerCase() !== "codeql");
+  if (echt.length > 0) return luecke(CS_PUNKT, `${echt.map((t) => `„${t}“`).join(", ")}: keine Workflow-Quelle mit SARIF-Upload (ein Ruleset-Werkzeug ohne Quelle blockiert jeden PR ewig)`, CS_FIX);
+  if (ohne.length > 0) return nichtPruefbar(CS_PUNKT, "CodeQL: kein Workflow mit `github/codeql-action/analyze` (das Default-Setup läuft serverseitig und ist aus den Dateien nicht belegbar)", `unter Einstellungen > Code security prüfen, ob das Default-Setup aktiv ist, oder das Sicherheits-Modul \`codeql\` wählen (\`module\` in \`${PROJEKT_CONFIG}\`)`);
+  return gut(CS_PUNKT);
+}
+
 /** Die Dateipunkte des Doctors in fester Reihenfolge (die eine Quelle; `pruefeDateien` liefert genau diese Punkte, nie weniger). */
-export const DATEI_PUNKTE = Object.freeze(["Root-Kontextdatei", "Zeilenenden", "Projektdateien", "Langfuse-Takt", "Gezielter Test", "Required-Check-Quellen"]);
+export const DATEI_PUNKTE = Object.freeze(["Root-Kontextdatei", "Zeilenenden", "Projektdateien", "Langfuse-Takt", "Gezielter Test", "Required-Check-Quellen", "Code-Scanning-Quellen", "Workflow-Auslöser"]);
 
 /**
  * Die Dateipunkte `DATEI_PUNKTE`. `spiegel` (Ruleset-Spiegel), `workflows` (`[{ pfad, text }]`) und `pflichtChecks` (Soll-Liste) liest der Aufrufer (`pruefLauf`) einmal und reicht sie herein;
  * ohne sie ist `Required-Check-Quellen` nicht prüfbar.
  */
-export function pruefeDateien({ rootDir, git = gitStandard(rootDir), existiert = existsSync, config = configOderNull(rootDir), spiegel, workflows = [], pflichtChecks = [] }) {
+export function pruefeDateien({ rootDir, git = gitStandard(rootDir), existiert = existsSync, config = configOderNull(rootDir), spiegel, workflows = [], pflichtChecks = [], vorAbbruch = false }) {
   const punkte = {
     "Root-Kontextdatei": () => kontextPunkt(rootDir, existiert),
     Zeilenenden: () => zeilenendenPunkt(git),
     Projektdateien: () => projektdateienPunkt(rootDir, existiert),
     "Langfuse-Takt": () => langfuseTaktPunkt(rootDir, existiert, config),
     "Gezielter Test": () => gezielterTestPunkt(config),
-    "Required-Check-Quellen": () => requiredCheckQuellenPunkt({ spiegel, workflows, pflichtChecks }),
+    "Required-Check-Quellen": () => requiredCheckQuellenPunkt({ spiegel, workflows, pflichtChecks, vorAbbruch }),
+    "Code-Scanning-Quellen": () => codeScanningQuellenPunkt({ spiegel, workflows, vorAbbruch }),
+    "Workflow-Auslöser": () => workflowAusloeserPunkt({ workflows }),
   };
   return DATEI_PUNKTE.map((p) => punkte[p]());
+}
+
+/* Punkt `Workflow-Auslöser`: gelesen vom Blockform-Leser `blockformAusloeser` (workflow-blockform.mjs, ohne `yaml`: der Wochenlauf hat kein `npm ci`); Flow-Liste `["CI"]` oder Blockliste `- CI` unter `workflows`.
+ * Eine Datei in nicht lesbarer Form (`on:` als Flow-Mapping, Anker, Alias, Tag, mehrzeilige Flow-Liste) macht den Punkt NICHT PRÜFBAR mit `datei:zeile`, nie „kein workflow_run“ (L20). */
+const AUSLOESER_PUNKT = "Workflow-Auslöser";
+
+/** Punkt `Workflow-Auslöser`: `workflows` ist `[{ pfad, text }]`. Pur. */
+export function workflowAusloeserPunkt({ workflows }) {
+  const gelesen = [];
+  const nichtLesbar = [];
+  for (const w of workflows ?? []) {
+    const pfad = w.pfad.replaceAll("\\", "/");
+    const r = blockformAusloeser(w.text);
+    if (r.fehler) nichtLesbar.push(`${pfad}:${r.fehler.zeile} ${r.fehler.konstrukt}`);
+    else gelesen.push({ pfad, name: r.name, ausloeser: r.ausloeser });
+  }
+  if (nichtLesbar.length > 0) {
+    return nichtPruefbar(AUSLOESER_PUNKT, `Workflow-Datei in einer Form, die der Blockform-Leser nicht liest: ${kurz(nichtLesbar)}`, "in Blockform schreiben (`on:`, `workflow_run:` und `workflows:` als eingerückte Mappings und Listen, ohne Flow-Mapping, Anker, Alias, Tag), dann erneut prüfen");
+  }
+  const vorhanden = new Set(gelesen.map((w) => w.name).filter((n) => n !== null));
+  const fehlend = gelesen.flatMap((w) => w.ausloeser.filter((n) => !vorhanden.has(n)).map((n) => ({ von: w.pfad.split("/").at(-1), name: n })));
+  if (fehlend.length === 0) return gut(AUSLOESER_PUNKT);
+  const befund = fehlend.map((f) => `${f.von} wartet auf „${f.name}“, kein Workflow heißt so`).join("; ");
+  const fix = fehlend.map((f) => `einen Workflow mit \`name: ${f.name}\` anlegen oder den Auslöser in ${f.von} auf einen vorhandenen Namen ändern`).join("; ");
+  return luecke(AUSLOESER_PUNKT, befund, `${fix}; sonst startet der Auslöser nie`);
 }

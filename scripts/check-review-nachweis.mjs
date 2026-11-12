@@ -33,9 +33,20 @@
  * Nachweis entsteht erst danach (Vorbild: check-festgefahren.mjs). Lokal:
  *   node scripts/check-review-nachweis.mjs
  *
+ * Größenstufe (factory#271): der Wächter berechnet sie aus dem Diff (`groessenstufe-lib.mjs`, nie vom Umsetzer behauptet). Nur bei `S` genügen
+ * `<praefixe.commitZeile>Plan: <Planer> — skizze`, `Plan: ohne — klein: <Begründung>` und bei Code-Diff `lenses=kombiniert` statt der drei Code-Brillen;
+ * bei `voll` sind diese Varianten rot, `klein` ohne Begründung immer. Die Risikoklasse hoch (Pfadmuster der Projekt-Config `risiko.hoch`, sonst Standardliste,
+ * factory#333) ist nie `S`; die Doku-Regel (nur `*.md`) steht nur in `groessenstufe-lib.mjs` (`istDokuDiff`). Der Nachweis bleibt Pflicht, nur die Besetzung ist kleiner.
+ * Bei Risikoklasse hoch verlangt `bewerteKlasseHoch` zusätzlich die Zeile `<praefixe.commitZeile>Bedrohungen:` (vier Teile, kein leerer) und die Brille `sicherheit` in `lenses` (factory#334); bei `normal` und `doku` entfällt beides.
+ *
  * Mit `--config <pfad>` liest der Wächter eine andere Projekt-Config (Test, fremdes Projekt), sonst die des Repos.
  *
- * Reines Node-Skript (nur Builtins + check-basis.mjs); die Bewertung ist pur exportiert.
+ * Hinweis (kein Fehler, Exit-Code gleich): die jüngste Commit-Zeile `Guard-Liste: <n> Anker` (Selbstcheck des Umsetzers) wird mit der Ankerzahl des Diffs
+ * aus `scripts/anker-liste.mjs` verglichen; Abweichung oder fehlende Zeile bei vorhandenen Ankern gibt eine `::warning::`-Zeile (`guardListeWarnung`).
+ * Grenzen: die jüngste Zeile muss die Gesamtzahl der Anker des Branches nennen, oder die Zeilen aller Commits (je Gruppe) ergeben summiert die Gesamtzahl (verglichen wird mit dem Gesamt-Diff gegen die Basis, nicht mit dem Anteil eines Commits); `anker-liste.mjs` kennt
+ * kein `--config`, das Kind liest immer die Config des Repos, auch bei `--config` hier.
+ *
+ * Reines Node-Skript (nur Builtins, check-basis.mjs und anker-liste.mjs); die Bewertung ist pur exportiert.
  */
 
 import { istDirektaufruf } from "./direktaufruf.mjs";
@@ -45,7 +56,8 @@ import { trenneConfigArg } from "./projekt-config-lib.mjs";
 import { factorySeiteIn } from "./factory-seite.mjs";
 import { fileURLToPath } from "node:url";
 import { aktiverOverride, commitImSlice, ladeCommitZeilen, ladeCommitZeilenOderBeende, meldeUngueltigeOverrides, parseOverrideTrailers } from "./slice-override.mjs";
-import { MAX_FIX_RUNDEN, MAX_REVIEW_PAESSE, MAX_ZUSATZPAESSE, parseNachweis } from "./nachweis-lib.mjs";
+import { BEDROHUNGS_TEILE, BEKANNTE_LENSES, CODE_LENSES, KOMBI_LENS, MAX_FIX_RUNDEN, MAX_REVIEW_PAESSE, MAX_ZUSATZPAESSE, SICHERHEITS_LENS, kleinGrund, parseNachweis } from "./nachweis-lib.mjs";
+import { groessenstufeAusGit, istDokuDiff, ladeRisikoMuster } from "./groessenstufe-lib.mjs";
 
 // parseNachweis lebt im neutralen Modul nachweis-lib.mjs (auch das Messskript token-baseline.mjs liest die Zeilen);
 // hier bleibt der Export für die Aufrufer und Tests dieses Gates.
@@ -55,8 +67,8 @@ export { parseNachweis };
 export { MAX_FIX_RUNDEN, MAX_REVIEW_PAESSE };
 
 const WURZEL = fileURLToPath(new URL("..", import.meta.url));
-const CODE_LENSES = ["architektur", "requirement-treue", "test-adaequanz"];
-export const BEKANNTE_LENSES = [...CODE_LENSES, "doku"];
+// Die Brillen-Schlüssel leben in nachweis-lib.mjs (auch der Lens-Auftrag-Guard braucht sie, ohne dieses Gate zu importieren); hier bleibt der Export.
+export { BEKANNTE_LENSES };
 
 /** Die Vorlage, die bei Rot ausgegeben wird (SSOT des Formats: Factory-Seite docs/agent-harness.md §3a); Schlüssel und Planer aus `zeilen`. */
 export const vorlage = (zeilen) =>
@@ -64,15 +76,17 @@ export const vorlage = (zeilen) =>
   `${zeilen.review}: head=<sha-des-zuletzt-reviewten-Stands> runden=<1..${MAX_REVIEW_PAESSE}> ` +
   `lenses=architektur,requirement-treue,test-adaequanz ` +
   `blocker=architektur:<n>,requirement-treue:<n>,test-adaequanz:<n> verdikt=ok  ` +
-  `(bei reinem Markdown-Diff: lenses=doku blocker=doku:<n>)`;
+  `(bei reinem Markdown-Diff: lenses=doku blocker=doku:<n>)\n` +
+  `Nur bei Größenstufe S (node scripts/groessenstufe.mjs): ${zeilen.plan}: ${zeilen.planer} — skizze | ${zeilen.plan}: ohne — klein: <Begründung>; ` +
+  `bei Code-Diff lenses=kombiniert blocker=kombiniert:<n>\n` +
+  `Bei Risikoklasse hoch (Zeile RISIKO von node scripts/groessenstufe.mjs): lenses=…,sicherheit blocker=…,sicherheit:<n> und ` +
+  `${zeilen.bedrohungen}: daten=… | grenzen=… | missbrauch=… | datenschutz=… (wörtlich aus dem Plan)`;
 
 /** Welche Brillen Runde 1 mindestens abdecken muss: nur `*.md` → doku, sonst die drei
  *  Code-Brillen. Leere oder kaputte Dateiliste → voller Code-Satz (fail-closed). Gleiche
  *  Regel der Review-Staffel (Skill `review-lenses`, Wächter review-staffel.test.ts). */
 export function pflichtLenses(dateien) {
-  if (!Array.isArray(dateien) || dateien.length === 0) return [...CODE_LENSES];
-  if (dateien.some((d) => typeof d !== "string" || d.trim() === "")) return [...CODE_LENSES];
-  return dateien.every((d) => /\.md$/i.test(d.trim())) ? ["doku"] : [...CODE_LENSES];
+  return istDokuDiff(dateien) ? ["doku"] : [...CODE_LENSES];
 }
 
 /** Prüft das optionale Feld `blocker=` (#1123): je Brille die Zahl der Runde-1-Blocker. Fehlt es, ist die
@@ -144,9 +158,63 @@ function bewerteRunden(review, zeilen) {
   return [];
 }
 
+/** Plan-Zeile gegen die Größenstufe (factory#271): `skizze` und `ohne — klein: <Begründung>` nur bei `S`, `klein` ohne Begründung nie; jeder andere Grund bleibt wie bisher. Pure. */
+function bewertePlan(plan, stufe, zeilen) {
+  const P = zeilen.plan;
+  if (!plan) return [`${P}-Zeile fehlt (Planungspass nicht nachgewiesen).`];
+  if (plan.art === "ungueltig") {
+    return [`${P} ungültig: "${plan.zeile}" (erlaubt: "${zeilen.planer}", "${zeilen.planer} — skizze" oder "ohne — <Begründung>").`];
+  }
+  const klein = plan.art === "ohne" ? kleinGrund(plan.grund) : null;
+  if (klein?.art === "klein-ohne-begruendung") return [`${P}: "ohne — klein" braucht eine Begründung ("ohne — klein: <Begründung>").`];
+  const art = plan.art === "skizze" ? "skizze" : klein ? "ohne — klein" : null;
+  return art !== null && stufe !== "S" ? [`${P}: "${art}" gilt nur bei Größenstufe S (berechnet aus dem Diff: ${stufe}); hier ist der volle Planer-Lauf nötig.`] : [];
+}
+
+/** Lens-Satz der Runde 1 gegen die Diff-Art und die Größenstufe: die Pflicht-Brillen oder der volle Code-Satz; bei `S` und Code-Diff genügt `kombiniert` (factory#271). Pure. */
+function bewerteLensSatz(review, dateien, stufe, zeilen) {
+  const R = zeilen.review;
+  const pflicht = pflichtLenses(dateien);
+  const fehlend = pflicht.filter((l) => !review.lenses.includes(l));
+  const codeVoll = CODE_LENSES.every((l) => review.lenses.includes(l));
+  const kombi = review.lenses.includes(KOMBI_LENS);
+  if (fehlend.length === 0 || codeVoll || (kombi && stufe === "S" && pflicht.length > 1)) return [];
+  const kombiHinweis = kombi ? ` ${KOMBI_LENS} genügt nur bei Größenstufe S mit Code-Diff (berechnet aus dem Diff: ${stufe}).` : "";
+  return [
+    `${R}: lenses fehlt ${fehlend.join(", ")} (Pflicht für diese Diff-Art: ${pflicht.join(", ")}).${kombiHinweis} ` +
+      `Erwartet: lenses=${pflicht.join(",")} (kleingeschrieben, ASCII, ae/oe/ue statt Umlaute).`,
+  ];
+}
+
+/** Ein Teil der Bedrohungs-Zeile gilt als leer: leer oder nur ein Platzhalter (der Parser hat den Wert getrimmt) (`…`, `...`, `-`, `<…>`). */
+const istLeer = (wert) => wert === undefined || /^(?:…|\.{3}|-|<[^>]*>)?$/.test(wert);
+
+/** Fehler der Bedrohungs-Zeile (Klasse hoch): fehlende Zeile, leere, fehlende, doppelte, unbekannte oder schlüssellose Teile. Pur. */
+function bedrohungsFehler(b, zeilen, hinweis) {
+  const B = zeilen.bedrohungen;
+  if (!b) return [`${B}-Zeile fehlt (${hinweis}): ${B}: ${BEDROHUNGS_TEILE.map((t) => `${t}=…`).join(" | ")}.`];
+  const fehler = BEDROHUNGS_TEILE.filter((t) => istLeer(b.teile[t])).map((t) => `${B}: Teil ${t} fehlt oder ist leer (${hinweis}).`);
+  if (b.unbekannt.length > 0) fehler.push(`${B}: unbekannte Teile ${b.unbekannt.join(", ")} (erlaubt: ${BEDROHUNGS_TEILE.join(", ")}).`);
+  if (b.doppelt.length > 0) fehler.push(`${B}: Teile doppelt: ${b.doppelt.join(", ")}.`);
+  if (b.ohneSchluessel.length > 0) fehler.push(`${B}: Teil ohne \`=\` (erwartet <teil>=<wert>): ${b.ohneSchluessel.join(" | ")}.`);
+  return fehler;
+}
+
+/** Risikoklasse hoch (factory#334): die einzige Stelle der Prüfregel. Verlangt die Bedrohungs-Zeile (vier nicht leere Teile) und, sobald eine Review-Zeile da ist,
+ *  die Brille `sicherheit` in `lenses`. Bei `normal` und `doku` weder verlangt noch bewertet. Pur. */
+export function bewerteKlasseHoch(nachweis, risiko, zeilen) {
+  if ((risiko?.klasse ?? "hoch") !== "hoch") return []; // ohne Angabe fail-closed hoch
+  const hinweis = `Risikoklasse hoch: ${risiko?.gruende?.[0] ?? "Risikoklasse nicht übergeben (fail-closed)"}; Abschnitt beim ${zeilen.planer} holen, nie selbst schreiben; Skill review-lenses › ablauf-klasse-hoch.md`;
+  const fehler = bedrohungsFehler(nachweis.bedrohungen, zeilen, hinweis);
+  if (nachweis.review && !nachweis.review.lenses.includes(SICHERHEITS_LENS)) {
+    fehler.push(`${zeilen.review}: lenses fehlt ${SICHERHEITS_LENS} (${hinweis}).`);
+  }
+  return fehler;
+}
+
 /** Bewertet einen geparsten Nachweis. `headBekannt`: der SHA lässt sich als Commit auflösen;
  *  `headImSlice`: er liegt in `<basis>..HEAD`. Liefert alle Fehler (leer = ok). Pure. */
-export function bewerteNachweis({ nachweis, dateien, headBekannt, headImSlice, konfliktMerges = [], aenderungsCommits = [], zeilen }) {
+export function bewerteNachweis({ nachweis, dateien, headBekannt, headImSlice, konfliktMerges = [], aenderungsCommits = [], zeilen, stufe = "voll", risiko }) {
   if (!zeilen) throw new Error("bewerteNachweis braucht die Commit-Zeilen (commitZeilen), keinen Standardwert");
   const R = zeilen.review;
   const fehler = [];
@@ -166,10 +234,7 @@ export function bewerteNachweis({ nachweis, dateien, headBekannt, headImSlice, k
     );
   }
   const { plan, review } = nachweis;
-  if (!plan) fehler.push(`${zeilen.plan}-Zeile fehlt (Planungspass nicht nachgewiesen).`);
-  else if (plan.art === "ungueltig") {
-    fehler.push(`${zeilen.plan} ungültig: "${plan.zeile}" (erlaubt: "${zeilen.planer}" oder "ohne — <Begründung>").`);
-  }
+  fehler.push(...bewertePlan(plan, stufe, zeilen), ...bewerteKlasseHoch(nachweis, risiko, zeilen));
   if (!review) {
     fehler.push(`${R}-Zeile fehlt (Review-Konvergenz nicht nachgewiesen).`);
     return fehler;
@@ -184,15 +249,7 @@ export function bewerteNachweis({ nachweis, dateien, headBekannt, headImSlice, k
   } else {
     fehler.push(...bewerteRunden(review, zeilen));
   }
-  const pflicht = pflichtLenses(dateien);
-  const fehlend = pflicht.filter((l) => !review.lenses.includes(l));
-  const codeVoll = CODE_LENSES.every((l) => review.lenses.includes(l));
-  if (fehlend.length > 0 && !codeVoll) {
-    fehler.push(
-      `${R}: lenses fehlt ${fehlend.join(", ")} (Pflicht für diese Diff-Art: ${pflicht.join(", ")}). ` +
-        `Erwartet: lenses=${pflicht.join(",")} (kleingeschrieben, ASCII, ae/oe/ue statt Umlaute).`,
-    );
-  }
+  fehler.push(...bewerteLensSatz(review, dateien, stufe, zeilen));
   const unbekannt = review.lenses.filter((l) => !BEKANNTE_LENSES.includes(l));
   if (unbekannt.length > 0) {
     fehler.push(`${R}: lenses enthält unbekannte Brille(n) ${unbekannt.join(", ")} (bekannt: ${BEKANNTE_LENSES.join(", ")}).`);
@@ -202,9 +259,30 @@ export function bewerteNachweis({ nachweis, dateien, headBekannt, headImSlice, k
   return fehler;
 }
 
+/**
+ * Pur: Warnung, wenn weder die jüngste Zeile `Guard-Liste: <n> Anker` (am Zeilenanfang einer Commit-Message, der Selbstcheck des Umsetzers) noch die
+ * Summe aller solcher Zeilen (Commits je Gruppe) zur Ankerzahl `ist` des Diffs passt (`scripts/anker-liste.mjs`); ohne Zeile nur, wenn der Diff Anker hat. Sonst `null`. Nie ein Fehler (Exit-Code gleich).
+ */
+export function guardListeWarnung({ messages, ist }) {
+  const treffer = [...String(messages).replace(/\r/g, "").matchAll(/^Guard-Liste: (\d+) Anker\b/gm)];
+  if (treffer.length === 0) return ist > 0 ? `::warning::Guard-Liste: keine Zeile \`Guard-Liste: <n> Anker\` in den Commits, der Diff hat ${ist} Anker (node scripts/anker-liste.mjs)` : null;
+  const genannt = Number(treffer[treffer.length - 1][1]);
+  const summe = treffer.reduce((s, t) => s + Number(t[1]), 0);
+  return genannt === ist || summe === ist ? null : `::warning::Guard-Liste nennt ${genannt} Anker, der Diff hat ${ist} Anker (node scripts/anker-liste.mjs)`;
+}
+
+/** Die Warnung zu `messages` mit der Ankerzahl aus `ankerZahl()`; ohne `ankerZahl` (der Aufruf wirft) oder bei einem Fehler dort `null` (eine Warnung bricht nie ab). */
+function guardWarnungOderNull(messages, ankerZahl) {
+  try {
+    return guardListeWarnung({ messages, ist: ankerZahl() });
+  } catch {
+    return null;
+  }
+}
+
 /** Führt die Prüfung gegen git aus. `runGit`/`env`/`ladeZeilen` injizierbar (Test; `ladeZeilen` liest standardmäßig die echte Projekt-Config).
  *  Fail-closed: ein Ladefehler der Config, eine nicht auflösbare Basis oder ein git-Fehler ist rot. Basis == HEAD ist grün (nichts zu prüfen). */
-export function checkReviewNachweis({ runGit, env = process.env, ladeZeilen = ladeCommitZeilen } = {}) {
+export function checkReviewNachweis({ runGit, env = process.env, ladeZeilen = ladeCommitZeilen, ladeRisiko, ankerZahl } = {}) {
   let zeilen;
   try {
     zeilen = ladeZeilen();
@@ -235,6 +313,7 @@ export function checkReviewNachweis({ runGit, env = process.env, ladeZeilen = la
       hd = commitImSlice(git, base, nachweis.review.head);
       if (hd.imSlice) commitsNachReview = Number(git(["rev-list", "--count", "--no-merges", `${hd.sha}..HEAD`]).trim());
     }
+    const groesse = groessenstufeAusGit(git, base, "HEAD", { ladeRisiko });
     const fehler = bewerteNachweis({
       nachweis,
       dateien,
@@ -243,6 +322,8 @@ export function checkReviewNachweis({ runGit, env = process.env, ladeZeilen = la
       konfliktMerges: hd.konfliktMerges,
       aenderungsCommits: hd.aenderungsCommits,
       zeilen,
+      stufe: groesse.stufe,
+      risiko: groesse.risiko,
     });
     return {
       ok: fehler.length === 0,
@@ -250,6 +331,7 @@ export function checkReviewNachweis({ runGit, env = process.env, ladeZeilen = la
       invalid: ov.invalid,
       commitsNachReview,
       blockerFehlt: nachweis.review?.blocker === null,
+      guardWarnung: guardWarnungOderNull(messages, ankerZahl),
       zusatzpass: nachweis.review?.zusatzpass && "grund" in nachweis.review.zusatzpass ? nachweis.review.zusatzpass : null,
     };
   } catch (e) {
@@ -260,6 +342,13 @@ export function checkReviewNachweis({ runGit, env = process.env, ladeZeilen = la
 /** CLI-Zeile zum Zusatzpass; `null` ohne gültigen Zusatzpass. Pur. */
 export const zusatzpassZeile = (r) => (r.zusatzpass ? `• Zusatzpass: ${r.zusatzpass.grund}` : null);
 
+/** Die Ankerzahl des Diffs gegen die Basis: das Einstiegsskript `anker-liste.mjs --json` als Kindprozess (kein Import eines Einstiegsskripts); wirft bei Fehler. */
+function ankerZahlImDiff() {
+  const skript = fileURLToPath(new URL("./anker-liste.mjs", import.meta.url));
+  const liste = JSON.parse(execFileSync(process.execPath, [skript, "--json"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
+  return liste.reduce((summe, e) => summe + e.anker.length, 0);
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function main(argv = process.argv.slice(2)) {
   const getrennt = trenneConfigArg(argv);
@@ -269,7 +358,7 @@ function main(argv = process.argv.slice(2)) {
   }
   // Die Config wird vor jedem git-Aufruf geladen: ein Ladefehler endet mit Exit 1 und der Meldung des Laders (Pfad, Schlüssel, Fix:).
   const zeilen = ladeCommitZeilenOderBeende({ laden: () => ladeCommitZeilen({ pfad: getrennt.pfad }) });
-  const r = checkReviewNachweis({ ladeZeilen: () => zeilen });
+  const r = checkReviewNachweis({ ladeZeilen: () => zeilen, ladeRisiko: () => ladeRisikoMuster({ pfad: getrennt.pfad }), ankerZahl: ankerZahlImDiff });
   if (r.skipped) {
     console.log("• check-review-nachweis: Basis == HEAD, nichts zu prüfen.");
     return;
@@ -284,6 +373,7 @@ function main(argv = process.argv.slice(2)) {
     if (typeof r.commitsNachReview === "number") {
       console.log(`• ${r.commitsNachReview} Commit(s) nach dem reviewten Stand (inkl. Nachweis-Commit).`);
     }
+    if (r.guardWarnung) console.log(r.guardWarnung);
     if (r.blockerFehlt) console.log("• Hinweis: blocker= fehlt (Messung #1123).");
     const zusatz = zusatzpassZeile(r);
     if (zusatz) console.log(zusatz);

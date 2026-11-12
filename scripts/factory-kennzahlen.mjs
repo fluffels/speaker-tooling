@@ -3,15 +3,28 @@
  * Factory-Kennzahlen (ADR 0022 §6, F14): Lauf-Ergebnis, Nacharbeit und Kosten je Ticket als ein Markdown-Block
  * für den Bericht-Kommentar des Wochen-Status-Tickets, dazu die Abnahme-Quote im ersten Durchgang. Fehlende Daten erscheinen als Lücke mit Grund, nie als 0.
  *
- *   node scripts/factory-kennzahlen.mjs --von <ISO> --bis <ISO> [--langfuse] [--json]
+ *   node scripts/factory-kennzahlen.mjs --von <ISO> --bis <ISO> [--langfuse] [--json] [--datenbasis]
  *
  * Verkettung über Unterprozesse mit `--json` (Einstiegsskripte importieren einander nicht): `lauf-ergebnis.mjs` für
  * Lauf-Ergebnis und Nacharbeit, `token-baseline.mjs` je Ticket für die Kosten (Standard: Transkript, `--langfuse`
  * ausdrücklich), `naechstes-ticket.mjs --maengel` für den Abschnitt „Spezifikation“. Ticket → Session über die Claim-Zeile im lokalen Transkript. Definitionen und Grenzen:
  * docs/model-routing.md (Fabrik) › Factory-Kennzahlen.
  *
- * Exit 0 ok (auch mit Kosten-Lücken), 1 Aufruffehler, 2 Lauf-Ergebnis fehlt oder verletzt den Vertrag (Block erscheint trotzdem).
+ * Abschnitt „Abo-Kontingent je Ticket“ (factory#285): Prozentpunkte des 7-Tage-Fensters je gemergtem Ticket aus dem Kontingent-Verlauf der Statusline
+ * (`abo-kontingent-lib.mjs`, Claims per GraphQL); fehlt der Verlauf, gh oder das Lauf-Ergebnis, erscheint eine Lücke mit Grund, der Exit-Code bleibt.
+ *
+ * Abschnitt „Tokens je Abo-Prozentpunkt“ (factory#290): die Tokens der lokalen Transkripte (alle Projektordner, das Limit gilt kontoweit) zwischen zwei Punkten
+ * desselben Verlaufs, je Tag und Woche (`tokens-je-prozentpunkt-lib.mjs`); ohne Verlauf oder Transkripte eine Lücke mit Grund, der Exit-Code bleibt.
+ *
+ * `--datenbasis` (factory#258) ist die Vorprüfung des Status-Laufs und läuft allein: je Ticket-Lauf des Zeitraums (`lauf-ergebnis`) die
+ * Sessions mit Claim-Zeile im lokalen Transkript zählen; kein token-baseline, kein Audit, keine Nacharbeit. Stand: `leer` (kein Lauf),
+ * `erfüllt` (alle), `teilweise` (normal bei zwei Maschinen), `verletzt` (0 von n). Grenze: Codex-Läufe zählen als ohne Transkript
+ * (`transkript.mjs` liest nur Claude-Transkripte, Codex hat keinen Langfuse-Exporter).
+ *
+ * Exit 0 ok (auch mit Kosten-Lücken), 1 Aufruffehler, 2 Lauf-Ergebnis fehlt oder verletzt den Vertrag (Block erscheint trotzdem),
+ * 3 nur mit `--datenbasis`: Vorbedingung verletzt (keine Transkripte der Ticket-Läufe auf dieser Maschine).
  */
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { istDirektaufruf } from "./direktaufruf.mjs";
 import { spawnSync } from "node:child_process";
@@ -20,16 +33,19 @@ import { flagsLesen } from "./flag-lib.mjs";
 import { toolEventsFromTranscript } from "./brain-metrics.mjs";
 import { REPO } from "./board-lib.mjs";
 import { fehlerText, ghJson } from "./gh-cli.mjs";
+import { aboKontingent, aboKontingentAbschnitt, claimAbfrage, claimsAusAntwort, verlaufAus } from "./abo-kontingent-lib.mjs";
+import { verlaufPfad } from "./budget-lib.mjs";
 import { claimNummer, median } from "./mess-lib.mjs";
 import { PRODUKT_QUOTE, harnessIssuesAnfrage, harnessIssuesAus, holeQuotenCommits, istHarnessCommit, quotenCommitLeser, quotenQuellen, sammelStand, zaehleTaktMerges, zaehleTicketMerges } from "./produktquote-lib.mjs";
 import { MAX_REVIEW_PAESSE, MAX_ZUSATZPAESSE } from "./nachweis-lib.mjs";
 import { labelAus, ladeProjektConfig } from "./projekt-config-lib.mjs";
-import { ladeSessions, projektOrdner } from "./transkript.mjs";
+import { callsAus, tokensJeProzentpunkt, tokensJeProzentpunktAbschnitt } from "./tokens-je-prozentpunkt-lib.mjs";
+import { ladeSessions, projekteWurzel, projektOrdner } from "./transkript.mjs";
 
 /** Nacharbeitsfenster von `lauf-ergebnis.mjs` (NACHARBEIT_TAGE dort; ein Einstiegsskript importiert das andere nicht, Test `vertrag` hält beide gleich). */
 export const NACHARBEIT_TAGE = 14;
 const TAG_MS = 24 * 3600 * 1000;
-export const AUFRUFHILFE = "Aufruf: node scripts/factory-kennzahlen.mjs --von <ISO> --bis <ISO> [--langfuse] [--json]";
+export const AUFRUFHILFE = "Aufruf: node scripts/factory-kennzahlen.mjs --von <ISO> --bis <ISO> [--langfuse] [--json] [--datenbasis]";
 
 const gueltig = (iso) => Number.isFinite(Date.parse(String(iso ?? "")));
 
@@ -37,9 +53,9 @@ const gueltig = (iso) => Number.isFinite(Date.parse(String(iso ?? "")));
 export function parseArgs(argv) {
   const iso = "--von und --bis brauchen je ein gültiges ISO-Datum.";
   const meldung = { "ohne-wert": iso, fehlt: iso };
-  const optionen = { von: { type: "string" }, bis: { type: "string" }, langfuse: { type: "boolean" }, json: { type: "boolean" } };
+  const optionen = { von: { type: "string" }, bis: { type: "string" }, langfuse: { type: "boolean" }, json: { type: "boolean" }, datenbasis: { type: "boolean" } };
   const { werte, fehler } = flagsLesen(argv, optionen, { pflicht: ["von", "bis"], meldung });
-  const a = { von: werte.von, bis: werte.bis, langfuse: werte.langfuse === true, json: werte.json === true, fehler: fehler?.text ?? null };
+  const a = { von: werte.von, bis: werte.bis, langfuse: werte.langfuse === true, json: werte.json === true, datenbasis: werte.datenbasis === true, fehler: fehler?.text ?? null };
   if (!gueltig(a.von) || !gueltig(a.bis)) a.fehler ??= "--von und --bis brauchen je ein gültiges ISO-Datum.";
   return a;
 }
@@ -122,8 +138,8 @@ export function vertragPruefen(json) {
   if (!ab || typeof ab !== "object") return { luecke: "lauf-ergebnis: Kennzahl-Feld fehlt: abnahme (Vertrag verletzt)" };
   const abFehlt = ABNAHME_FELDER.filter((f) => !Number.isFinite(ab[f]));
   if (abFehlt.length > 0) return { luecke: `lauf-ergebnis: Kennzahl-Feld fehlt: ${abFehlt.map((f) => `abnahme.${f}`).join(", ")} (Vertrag verletzt)` };
-  const kaputt = json.zeilen.find((z) => !z || !Number.isFinite(z.pr) || !Number.isFinite(z.ciFix) || !gueltig(z.gemergt) || typeof z.nacharbeit !== "string" || !abnahmeGueltig(z.abnahme));
-  if (kaputt !== undefined) return { luecke: "lauf-ergebnis: Zeile ohne pr/ciFix/gemergt/nacharbeit/abnahme (Vertrag verletzt)" };
+  const kaputt = json.zeilen.find((z) => !z || !Number.isFinite(z.pr) || !Number.isFinite(z.ciFix) || !gueltig(z.gemergt) || typeof z.nacharbeit !== "string" || typeof z.fristAbgelaufen !== "boolean" || !abnahmeGueltig(z.abnahme));
+  if (kaputt !== undefined) return { luecke: "lauf-ergebnis: Zeile ohne pr/ciFix/gemergt/nacharbeit/fristAbgelaufen/abnahme (Vertrag verletzt)" };
   return { daten: json };
 }
 
@@ -181,6 +197,43 @@ function abnahmeAbschnitt(lauf) {
   ];
 }
 
+/** Die Ticketarten der Kosten- und Abnahme-Auswertung, in Anzeigereihenfolge. */
+export const TICKETARTEN = ["Produkt", "Harness", "Sammelticket"];
+
+/** Die Art eines Tickets: Sammelticket (Titel aus `SAMMELTICKET_TITEL_LISTE`, trägt oft auch das Harness-Label) vor Harness (`labels.harness`) vor Produkt. Pure. */
+export function ticketArt(nr, { sammelIssues, harnessIssues }) {
+  if (sammelIssues.has(nr)) return "Sammelticket";
+  return harnessIssues.has(nr) ? "Harness" : "Produkt";
+}
+
+/**
+ * Median der Kosten und Abnahme im ersten Durchgang je Ticketart: `{ gruppen: [{ art, tickets, gemessen, median, abnahmeGemessen, abnahmeErster }] }`
+ * oder `{ luecke }`, wenn die Zuordnung nicht möglich ist (Harness-Issues oder Sammeltickets nicht geladen): dann keine geratene Aufteilung. `tickets` = `[{ ticket, pr, ergebnis }]`,
+ * `zeilen` = PR-Zeilen von `lauf-ergebnis.mjs`; PRs ohne Ticket und Kosten-Lücken zählen nicht in den Median (nie 0 $). Pure.
+ */
+export function artGruppen({ tickets, zeilen, sammelIssues, harnessIssues, harnessLuecke = null }) {
+  if (!(harnessIssues instanceof Set)) return { luecke: harnessLuecke ?? "Harness-Issues nicht geladen" };
+  if (!(sammelIssues instanceof Set)) return { luecke: "Sammeltickets nicht geladen" };
+  const art = (nr) => ticketArt(nr, { sammelIssues, harnessIssues });
+  const gruppen = TICKETARTEN.map((name) => {
+    const meine = tickets.filter((t) => art(t.ticket) === name);
+    const gemessen = meine.filter((t) => t.ergebnis.kosten !== undefined);
+    const urteile = zeilen.filter((z) => z.ticket && art(z.ticket) === name && typeof z.abnahme === "object" && z.abnahme !== null);
+    return { art: name, tickets: meine.length, gemessen: gemessen.length, median: median(gemessen.map((t) => t.ergebnis.kosten)), abnahmeGemessen: urteile.length, abnahmeErster: urteile.filter((z) => z.abnahme.durchgaenge === 1).length };
+  });
+  return { gruppen };
+}
+
+/** Abschnitt „Ticketarten“ (Tabelle je Art; Median ohne Messung und Abnahme ohne Urteil als „–“, nie 0); eine Lücke zeigt den Grund. Pure. */
+export function artenAbschnitt(arten) {
+  if (arten.luecke) return [`- Lücke: ${arten.luecke}`];
+  return [
+    "| Art | Tickets | Gemessen | Median Kosten | Abnahme im 1. Durchgang |",
+    "|---|---|---|---|---|",
+    ...arten.gruppen.map((g) => `| ${g.art} | ${g.tickets} | ${g.gemessen} | ${g.median === null ? "–" : dollar(g.median)} | ${anteil(g.abnahmeErster, g.abnahmeGemessen)} |`),
+  ];
+}
+
 /** Höchstens so viele Tickets mit Mangel zeigt der Abschnitt einzeln (der Rest als Zahl). */
 export const MAENGEL_ZEILEN_MAX = 10;
 
@@ -195,9 +248,12 @@ export function spezifikationAbschnitt(s) {
 }
 
 /** Bericht als Daten: `lauf`/`nacharbeit` = `vertragPruefen`-Ergebnis, `tickets` = `[{ticket, pr, ergebnis}]`. Pure. */
-export function bericht({ von, bis, lauf, nacharbeit, tickets, quelle, audit, spezifikation }) {
+export function bericht({ von, bis, lauf, nacharbeit, tickets, quelle, audit, spezifikation, arten, kontingent, tokensJePp }) {
   return {
+    ...(kontingent ? { kontingent } : {}),
+    ...(tokensJePp ? { tokensJePp } : {}),
     ...(audit ? { audit } : {}),
+    ...(arten ? { arten } : {}),
     ...(spezifikation ? { spezifikation } : {}),
     zeitraum: { von, bis },
     nacharbeitFenster: nacharbeitFenster(von, bis),
@@ -222,6 +278,9 @@ export function renderMarkdown(b) {
     "",
     "**Kosten je Ticket**",
     ...kosten,
+    ...(b.arten ? ["", "**Ticketarten**", ...artenAbschnitt(b.arten)] : []),
+    ...(b.kontingent ? ["", "**Abo-Kontingent je Ticket**", ...aboKontingentAbschnitt(b.kontingent)] : []),
+    ...(b.tokensJePp ? ["", "**Tokens je Abo-Prozentpunkt**", ...tokensJeProzentpunktAbschnitt(b.tokensJePp)] : []),
     "",
     "**Abnahme-Quote**",
     ...abnahmeAbschnitt(b.lauf),
@@ -317,11 +376,17 @@ function ladeHarnessIssues({ gh, repo, config, configFehler, seit }) {
   }
 }
 
+/** Ab wann geschlossene Harness-Issues zu laden sind: einen Tag vor dem früheren von `since` und dem Berichtsfenster `von` (die Ticketarten brauchen das ganze Fenster). Pur. */
+function harnessSeitAus(since, von) {
+  const fruehest = Math.min(Date.parse(since), gueltig(von) ? Date.parse(von) : Number.POSITIVE_INFINITY);
+  return new Date(fruehest - TAG_MS).toISOString();
+}
+
 /**
  * Lädt die Rohdaten des Selbst-Audits mit drei gh-Aufrufen (Sammeltickets mit `--limit`, Commits von main seit deren letztem Abschluss und geschlossene Harness-Issues ab dann minus 1 Tag, paginiert;
  * keine Modell-Tokens). `gh` ist injizierbar. Ein Ladefehler wird zur Lücke mit Grund (`commitsLuecke`, bei den Harness-Issues `harnessLuecke`), nie zu leeren Daten.
  */
-export function ladeAuditDaten({ bis }, { gh = ghJson, repo = REPO, config = null, configFehler = null, env = process.env } = {}) {
+export function ladeAuditDaten({ von, bis }, { gh = ghJson, repo = REPO, config = null, configFehler = null, env = process.env } = {}) {
   let issues;
   try {
     issues = gh(["issue", "list", "--repo", repo, "--state", "all", "--search", "in:title \"gesammelt\"", "--json", "number,title,state,closedAt,assignees", "--limit", "200"]);
@@ -332,7 +397,7 @@ export function ladeAuditDaten({ bis }, { gh = ghJson, repo = REPO, config = nul
   const sammelAbschluss = stand.abschluss?.closedAt ?? null;
   const since = sammelAbschluss ? new Date(Date.parse(sammelAbschluss) + 60_000).toISOString() : new Date(Date.parse(bis) - 28 * TAG_MS).toISOString();
   const rest = { sammelAbschluss, sammelIssues: stand.sammelIssues, sammelInArbeit: stand.inArbeit };
-  const harnessSeit = new Date(Date.parse(since) - TAG_MS).toISOString();
+  const harnessSeit = harnessSeitAus(since, von);
   try {
     // Nach einem Umzug des Factory-Boards (#78) zählen die Commits beider Repos; ein fremdes Repo liest der Projekt-Token.
     const quellen = quotenQuellen({ config, repo });
@@ -411,23 +476,100 @@ export function holeKosten({ ticket, pr, claims, langfuse }, run = runSkript) {
   return { kosten: summe };
 }
 
+/** Selbst-Audit und Ticketarten aus einem Lauf des Audit-Laders (`{ von, bis }`); ohne Lader beides `undefined`, ohne Lauf-Ergebnis keine Ticketarten. */
+function auditUndArten(auditLader, { von, bis, lauf, tickets }) {
+  if (!auditLader) return {};
+  const daten = auditLader({ von, bis });
+  const zeilen = lauf.daten?.zeilen ?? null;
+  const arten = zeilen ? artGruppen({ tickets, zeilen, sammelIssues: daten.sammelIssues, harnessIssues: daten.harnessIssues, harnessLuecke: daten.harnessLuecke }) : undefined;
+  return { audit: selbstAudit({ ...daten, zeilen }), arten };
+}
+
+/** Claim-Karte laden; nicht lesbar (etwa fehlender Transkript-Ordner) → `{ luecke }` mit Grund statt Abbruch, sonst `{ claims }`. */
+export function claimsOderLuecke(claimKarte) {
+  try {
+    return { claims: claimKarte() };
+  } catch (err) {
+    return { luecke: `Claim-Sessions nicht lesbar: ${fehlerText(err, 200)}` };
+  }
+}
+
 /**
  * Setzt den Bericht zusammen; IO injiziert (`run` für die Unterprozesse, `claimKarte` liefert die Karte Ticket → Sessions).
  * Exit 2, wenn Lauf-Ergebnis oder Nacharbeit-Lauf fehlen (der Block erscheint trotzdem). Nur mit gültigem `von`/`bis` rufen.
  */
-export function erstelle({ von, bis, langfuse = false }, { run = runSkript, claimKarte, auditLader = null, maengelLader = null }) {
+export function erstelle({ von, bis, langfuse = false }, { run = runSkript, claimKarte, auditLader = null, maengelLader = null, kontingentLader = null, tokensLader = null }) {
   const fenster = nacharbeitFenster(von, bis);
   const lauf = holeLauf(von, bis, run);
   const nacharbeit = holeLauf(fenster.von, fenster.bis, run);
   let tickets = [];
+  let kontingent;
   if (lauf.daten) {
-    const claims = claimKarte();
-    tickets = ticketLaeufe(lauf.daten.zeilen).tickets.map((z) => ({ ticket: z.ticket, pr: z.pr, ergebnis: holeKosten({ ticket: z.ticket, pr: z.pr, claims: claims.get(z.ticket), langfuse }, run) }));
-  }
-  const audit = auditLader ? selbstAudit({ ...auditLader({ bis }), zeilen: lauf.daten?.zeilen ?? null }) : undefined;
+    const { claims, luecke } = claimsOderLuecke(claimKarte);
+    const reihen = ticketLaeufe(lauf.daten.zeilen).tickets;
+    kontingent = kontingentLader ? kontingentLader({ von, bis, tickets: reihen }) : undefined; // eine Lücke dort ändert den Exit-Code nicht
+    tickets = reihen.map((z) => ({ ticket: z.ticket, pr: z.pr, ergebnis: luecke ? { luecke } : holeKosten({ ticket: z.ticket, pr: z.pr, claims: claims.get(z.ticket), langfuse }, run) }));
+  } else if (kontingentLader) kontingent = { luecke: "kein Lauf-Ergebnis" };
+  const tokensJePp = tokensLader ? tokensLader({ von, bis }) : undefined; // unabhängig vom Lauf-Ergebnis, eine Lücke ändert den Exit-Code nicht
+  const { audit, arten } = auditUndArten(auditLader, { von, bis, lauf, tickets });
   const spezifikation = maengelLader ? maengelLader() : undefined; // eine Lücke dort ändert den Exit-Code nicht (wie bei den Kosten)
-  const b = bericht({ von, bis, lauf, nacharbeit, tickets, quelle: langfuse ? "Langfuse" : "Transkript", audit, spezifikation });
+  const b = bericht({ von, bis, lauf, nacharbeit, tickets, quelle: langfuse ? "Langfuse" : "Transkript", audit, spezifikation, arten, kontingent, tokensJePp });
   return { bericht: b, exit: lauf.luecke || nacharbeit.luecke ? 2 : 0 };
+}
+
+const KONTINGENT_BLOCK = 50;
+
+/**
+ * Abo-Kontingent je Ticket (factory#285): Verlauf lesen, Claims per GraphQL holen (Blöcke zu `KONTINGENT_BLOCK`), auswerten.
+ * `tickets` = Lauf-Zeilen des Zeitraums. Verlauf oder gh nicht verfügbar: `{ luecke }` mit Grund, nie 0. IO injizierbar; kein Langfuse.
+ */
+export function ladeAboKontingent({ von, bis, tickets }, { gh = ghJson, lies = (p) => readFileSync(p, "utf8"), pfad = verlaufPfad() } = {}) {
+  let text;
+  try {
+    text = lies(pfad);
+  } catch {
+    return { luecke: `Kontingent-Verlauf fehlt: ${pfad}` };
+  }
+  const { punkte, kaputt } = verlaufAus(text);
+  const merge = new Map(tickets.map((t) => [t.ticket, t.gemergt]));
+  const claims = new Map();
+  try {
+    const nummern = [...merge.keys()];
+    for (let i = 0; i < nummern.length; i += KONTINGENT_BLOCK) {
+      const block = nummern.slice(i, i + KONTINGENT_BLOCK);
+      const antwort = gh(["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", `query=${claimAbfrage(block)}`]);
+      for (const [k, v] of claimsAusAntwort(antwort, new Map(block.map((n) => [n, merge.get(n)])))) claims.set(k, v);
+    }
+  } catch (err) {
+    return { luecke: `Claims nicht ladbar: ${fehlerText(err, 200)}` };
+  }
+  return aboKontingent({ tickets, punkte, kaputt, claims, von: Date.parse(von), bis: Date.parse(bis) });
+}
+
+/** Sitzungen aller Projektordner unter `wurzel` (das Limit gilt kontoweit), jeweils ab `von`; ein Ordner nach dem anderen. */
+function* alleSitzungen(wurzel, von) {
+  for (const d of readdirSync(wurzel, { withFileTypes: true })) if (d.isDirectory()) yield* ladeSessions(join(wurzel, d.name), von);
+}
+
+/**
+ * Tokens je Abo-Prozentpunkt (factory#290): Verlauf lesen, die Transkripte aller Projektordner zählen (`callsAus`), auswerten. Fehlt Verlauf oder
+ * Wurzel: `{ luecke }` mit Grund, nie 0. IO injizierbar (`lies`, `pfad`, `wurzel`, `sitzungen`); kein Langfuse, kein Unterprozess.
+ */
+export function ladeTokensJeProzentpunkt({ von, bis }, { lies = (p) => readFileSync(p, "utf8"), pfad = verlaufPfad(), wurzel = projekteWurzel(), sitzungen } = {}) {
+  let verlaufText;
+  try {
+    verlaufText = lies(pfad);
+  } catch {
+    return { luecke: `Kontingent-Verlauf fehlt: ${pfad}` };
+  }
+  let quelle;
+  try {
+    quelle = callsAus(sitzungen ?? alleSitzungen(wurzel, von));
+  } catch (err) {
+    return { luecke: `Transkripte nicht lesbar (${wurzel}): ${fehlerText(err, 200)}` };
+  }
+  const t = tokensJeProzentpunkt({ verlaufText, calls: quelle.calls, von: Date.parse(von), bis: Date.parse(bis) });
+  return { ...t, aufbau: { sitzungen: quelle.sitzungen, calls: quelle.calls.length, ohneZeit: quelle.ohneZeit } };
 }
 
 /** `{ config }` oder `{ config: null, configFehler }`: ein Ladefehler macht nur die Quote zur Lücke (mit dem echten Fehlertext), nie den ganzen Bericht kaputt. */
@@ -439,6 +581,53 @@ export function configOderFehler(lade = ladeProjektConfig) {
   }
 }
 
+/**
+ * Datenbasis des Zeitraums: Läufe (`ticketLaeufe`) gegen die Claim-Karte. `mitTranskript` zählt Tickets mit mindestens einer Session,
+ * `sessions` sind alle Session-IDs dieser Tickets (einmal, sortiert), `ohne` die Tickets ohne. Pure.
+ */
+export function datenbasis({ tickets, claims }) {
+  const mit = tickets.filter((t) => (claims.get(t.ticket) ?? []).length > 0);
+  const sessions = [...new Set(mit.flatMap((t) => claims.get(t.ticket).map((c) => c.session)))].sort();
+  const ohne = tickets.filter((t) => !mit.includes(t)).map((t) => t.ticket);
+  const n = tickets.length;
+  const stand = n === 0 ? "leer" : mit.length === n ? "erfüllt" : mit.length === 0 ? "verletzt" : "teilweise";
+  return { stand, laeufe: n, mitTranskript: mit.length, sessions, ohne };
+}
+
+/** Markdown-Block „Datenbasis“ für den Bericht. Pure. */
+export function datenbasisAbschnitt(d) {
+  const zeilen = ["### Datenbasis", "", `- Stand: ${d.stand}; Ticket-Läufe im Zeitraum: ${d.laeufe}, davon mit Transkript: ${d.mitTranskript} von ${d.laeufe}.`];
+  zeilen.push(`- Sessions mit Claim-Zeile: ${d.sessions.length > 0 ? d.sessions.join(", ") : "keine"}.`);
+  if (d.ohne.length > 0) zeilen.push(`- Tickets ohne Transkript: ${d.ohne.map((n) => `#${n}`).join(", ")}.`);
+  if (d.stand === "verletzt") zeilen.push("- Vorbedingung verletzt: keine Transkripte der Ticket-Läufe auf dieser Maschine (Status-Lauf auf der Maschine der Ticket-Läufe fahren).");
+  return zeilen.join("\n");
+}
+
+/** Zweig `--datenbasis`: `{ text, exit }`; Exit 3 bei `verletzt`, 2 mit Lücke statt Urteil, wenn `lauf-ergebnis` fehlt. IO injiziert. */
+export function erstelleDatenbasis({ von, bis }, { run = runSkript, claimKarte }) {
+  const lauf = holeLauf(von, bis, run);
+  if (lauf.luecke) return { text: `### Datenbasis\n\n- Lücke: ${lauf.luecke}`, exit: 2 };
+  const { claims, luecke } = claimsOderLuecke(claimKarte);
+  if (luecke) return { text: `### Datenbasis\n\n- Lücke: ${luecke}`, exit: 2 };
+  const d = datenbasis({ tickets: ticketLaeufe(lauf.daten.zeilen).tickets, claims });
+  return { text: datenbasisAbschnitt(d), exit: d.stand === "verletzt" ? 3 : 0 };
+}
+
+/** Modus `--datenbasis`: Block ausgeben und mit dem Exit des Blocks beenden (`beenden` ist im Betrieb `process.exit`). IO injiziert. */
+export function datenbasisModus({ von, bis }, { run, claimKarte, log, beenden }) {
+  const d = erstelleDatenbasis({ von, bis }, { run, claimKarte });
+  log(d.text);
+  beenden(d.exit);
+}
+
+/** Die Lader des echten Laufs (`main`); ein Test belegt, dass jeder eingehängt ist. */
+export const STANDARD_LADER = {
+  auditLader: (e) => ladeAuditDaten(e, configOderFehler()),
+  maengelLader: () => holeMaengel(),
+  kontingentLader: (e) => ladeAboKontingent(e),
+  tokensLader: (e) => ladeTokensJeProzentpunkt(e),
+};
+
 function main(argv) {
   const args = parseArgs(argv);
   if (args.fehler) {
@@ -447,7 +636,8 @@ function main(argv) {
   }
   const { von, bis, langfuse } = args;
   const claimKarte = () => claimSessions(ladeSessions(projektOrdner(), new Date(Date.parse(von) - TAG_MS).toISOString()));
-  const r = erstelle({ von, bis, langfuse }, { claimKarte, auditLader: (e) => ladeAuditDaten(e, configOderFehler()), maengelLader: () => holeMaengel() });
+  if (args.datenbasis) datenbasisModus({ von, bis }, { claimKarte, log: console.log, beenden: process.exit }); // beendet den Prozess
+  const r = erstelle({ von, bis, langfuse }, { claimKarte, ...STANDARD_LADER });
   console.log(args.json ? JSON.stringify(r.bericht, null, 2) : renderMarkdown(r.bericht));
   if (r.exit !== 0) process.exit(r.exit);
 }

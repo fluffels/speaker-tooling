@@ -2,7 +2,7 @@
 /**
  * Kontext-Treiber eines Subagent-Typs (#1559), Standard der Umsetzer der Projekt-Config (`agenten.umsetzer`): was macht den Kontext je Call groß und was kostet es?
  *
- *   node scripts/kontext-treiber.mjs --von <ISO> [--bis <ISO>] [--agent <name>] [--ticket <nr>]… [--ohne <nr>]… [--delta ja|nein] [--brille <name>] [--projekt <slug>] [--je-ticket] [--json]
+ *   node scripts/kontext-treiber.mjs --von <ISO> [--bis <ISO>] [--agent <name>]… [--ticket <nr>]… [--ohne <nr>]… [--delta ja|nein] [--brille <name>] [--projekt <slug>] [--je-ticket | --ttl] [--json]
  *
  * Die Agentennamen (`agenten.umsetzer` als Standard, `agenten.lens` für die Review-Phase) und das Worktree-Präfix kommen aus der Projekt-Config; fehlt sie oder ein Schlüssel, endet das CLI mit Exit 1 und der Meldung samt `Fix:`-Zeile (fail-closed).
  *
@@ -23,6 +23,8 @@
  * Kontext beim ersten Call des Nachfolgers, Nachlese-Calls (Read oder cat/sed/head des Nachfolgers auf Pfade, die ein Vorgänger per Edit/Write geändert hat;
  * grep und andere Lesewege zählen nicht), Kosten ab Phase X (Σ der Calls ab X in `PHASEN`-Reihenfolge). Grenzen: der Startzustand verify zählt Edits vor
  * dem ersten Lens-Spawn zu verify (konservativ gegen den Schnitt); Mehrkosten des Hauptchats für den zweiten Prompt sind nicht gemessen.
+ * `--ttl` (factory#312): statt der Kennzahlen die Gegenrechnung, ob die 1h-TTL für die Rolle netto spart (Mehrkosten des 1h-Schreibens gegen vermiedene Cache-Misse nach Pausen von 5 bis 60 min; Preise aus `preise.mjs`, Warmstart über Läufe derselben Session getrennt ausgewiesen). Grenzen: ein Treffer bis 60 min, Zeiten mit Nutzungsguthaben ignorieren 1h (Überschätzung); schließt `--je-ticket` und mehrere `--agent` aus.
+ * Mehrfaches `--agent` (factory#235, A/B Kern je Rolle): Bericht je Typ (`{ agenten: { <typ>: <Bericht> }, ungueltig }`); ein Ticket mit Läufen in mehr als einem der Typen ist ungültig, fällt aus allen Typen heraus (wie `--ohne`) und setzt Exit 3. Mit einem `--agent` bleibt die Ausgabe unverändert.
  * Offene Läufe (Tool-Aufruf ohne Ergebnis am Ende, #1646) zählen nur als `offen` und stehen in der Tabelle „Läufe"; in keinem Median, keiner Summe.
  * Ohne `--je-ticket` gelten die Mediane je Lauf: der Kopf jeder Gruppe nennt die Zahl der Tickets (`Tickets`), und hat ein Ticket mehrere Läufe, steht eine Warnzeile (`mehrlaufHinweis`, #1646).
  * Im `--je-ticket`-Modus lädt das CLI 48 h vor `--von` (`mitVorlauf`), damit der Vorgänger eines Nachfolgers im Fenster dabei ist.
@@ -33,10 +35,11 @@ import { readdirSync } from "node:fs";
 import { toolEventsFromTranscript } from "./brain-metrics.mjs";
 import { callsFromTranscript } from "./transkript-calls.mjs";
 import { escapeRegex } from "./regex-lib.mjs";
-import { PRICES, priceFor } from "./preise.mjs";
-import { bereinige, istNeuaufbau, kontextVon, median, normPfad, mehrlaufHinweis, passtTicketFilter, TICKET_OPTIONEN, ticketFilterAus, ticketMeldung, ticketZaehlung } from "./mess-lib.mjs";
+import { PRICES, PRICES_STAND, priceFor, priceParts } from "./preise.mjs";
+import { bereinige, CACHE_TTL_MS, istNeuaufbau, kontextVon, median, normPfad, mehrlaufHinweis, passtTicketFilter, TICKET_OPTIONEN, ticketFilterAus, ticketMeldung, ticketZaehlung } from "./mess-lib.mjs";
 import { flagsLesen } from "./flag-lib.mjs";
 import { namenOderGrund } from "./ticket-namen.mjs";
+import { armeZuordnen, lensTypen } from "./lens-arm-lib.mjs";
 import { hauptrepoWurzel, projektOrdner } from "./transkript.mjs";
 import { ladeLaeufe, laufAus, mitVorlauf } from "./subagent-laeufe.mjs";
 
@@ -53,7 +56,7 @@ const num = (x) => (Number.isFinite(x) ? x : 0);
 const summe = (liste) => liste.reduce((s, x) => s + x, 0);
 
 const befehlVon = (tool) => (SHELL_TOOLS.has(tool.tool) ? String(tool.input?.command ?? "") : "");
-const istLinse = (tool, namen) => tool.tool === "Agent" && String(tool.input?.subagent_type ?? "") === namen.agenten.lens;
+const istLinse = (tool, namen) => tool.tool === "Agent" && lensTypen(namen).includes(String(tool.input?.subagent_type ?? ""));
 
 /** Kurzbeschreibung eines Tool-Aufrufs für die Top-10 (Tool plus ~60 Zeichen Befehl, Pfad oder Muster). */
 function labelVon(tool, wurzel, namen) {
@@ -173,6 +176,127 @@ function liestPfad(aufruf, pfad) {
   return new RegExp(`(?<![\\w.-])${escapeRegex(pfad)}(?!\\w)`).test(aufruf.befehl);
 }
 
+// ── TTL-Gegenrechnung (factory#312) ──────────────────────────────────────────
+
+/** Mindestzahl Läufe einer Rolle, ab der die Gegenrechnung etwas belegt. */
+export const TTL_MIN_LAEUFE = 10;
+const STUNDE_MS = CACHE_TTL_MS.eineStunde;
+const cacheKosten = (c, w, r) => {
+  const p = priceParts({ ...c, cacheWrite: w, cacheWrite1h: w, cacheRead: r });
+  return p ? p.cacheWrite + p.cacheRead : null;
+};
+
+/**
+ * Ist- und 1h-Simulation der Cache-Kosten eines Laufs (factory#312). Ist = gebuchtes Schreiben und Lesen (`priceParts`); Simulation 1h = dieselben
+ * Tokens, jedes Schreiben zum 1h-Preis; liegt die Pause zum Vorgänger in (5 min, 60 min] und gilt `istNeuaufbau`, wäre der Präfix (Kontext des Vorgängers,
+ * höchstens der neu geschriebene Teil) gelesen statt geschrieben worden. Calls ohne gültige Zeit oder Preis zählen nur als `uebersprungen`.
+ */
+export function ttlLauf(eintraege) {
+  const z = { calls: 0, uebersprungen: 0, pausenUeber5: 0, neuaufbauUeber5: 0, vermeidbar: 0, ueber60: 0, ist: 0, sim: 0, erster: null, ersterMs: null, letzterMs: null };
+  eintraege.forEach((e, i) => {
+    const c = e.call;
+    const ms = Date.parse(c.ts);
+    const ist = Number.isFinite(ms) ? priceParts(c) : null;
+    if (!ist) {
+      z.uebersprungen += 1;
+      return;
+    }
+    z.calls += 1;
+    z.letzterMs = ms;
+    if (z.erster === null) {
+      z.erster = c;
+      z.ersterMs = ms;
+    }
+    const vorMs = i > 0 ? Date.parse(eintraege[i - 1].call.ts) : NaN;
+    const gapMs = ms - vorMs;
+    let w = num(c.cacheWrite);
+    let r = num(c.cacheRead);
+    if (Number.isFinite(gapMs) && gapMs > PAUSE_MS) {
+      z.pausenUeber5 += 1;
+      if (gapMs > STUNDE_MS) z.ueber60 += 1;
+      if (istNeuaufbau({ gapMs, pauseMs: PAUSE_MS, call: c })) {
+        z.neuaufbauUeber5 += 1;
+        if (gapMs <= STUNDE_MS) {
+          z.vermeidbar += 1;
+          const praefix = Math.min(kontextVon(eintraege[i - 1].call), r + w);
+          const gelesen = Math.max(r, praefix);
+          w = r + w - gelesen;
+          r = gelesen;
+        }
+      }
+    }
+    z.ist += ist.cacheWrite + ist.cacheRead;
+    z.sim += cacheKosten(c, w, r);
+  });
+  return z;
+}
+
+const istWarm = (c) => kontextVon(c) > 0 && !istNeuaufbau({ gapMs: Infinity, pauseMs: PAUSE_MS, call: c });
+
+/** Ersparnis in $, wenn der erste Call eines Laufs `verschoben` Tokens gelesen statt (1h) geschrieben hätte. */
+function warmstartErsparnis(c, verschoben) {
+  const w = num(c.cacheWrite);
+  const r = num(c.cacheRead);
+  return cacheKosten(c, w, r) - cacheKosten(c, w - verschoben, r + verschoben);
+}
+
+/** Läufe derselben Session, die vor `ms` einen Call hatten: Warmstart-Kandidat, wenn der letzte 5 bis 60 min zurückliegt und keiner in den 5 min davor aktiv war. */
+function istWarmstartKandidat(lauf, andere) {
+  const ms = lauf.ttl.ersterMs;
+  if (andere.some((o) => o.ttl.ersterMs <= ms && o.ttl.letzterMs > ms - PAUSE_MS)) return false;
+  const davor = andere.filter((o) => o.ttl.letzterMs <= ms - PAUSE_MS).map((o) => o.ttl.letzterMs);
+  return davor.length > 0 && ms - Math.max(...davor) <= STUNDE_MS;
+}
+
+/** Warmstart über Läufe hinweg: Kandidaten, Sockel (Median des Cache-Reads warm gestarteter erster Calls der Rolle) und Ersparnis in $. */
+function warmstart(analysen) {
+  const mitErstem = analysen.filter((a) => a.ttl.erster);
+  const sockel = median(mitErstem.filter((a) => istWarm(a.ttl.erster)).map((a) => num(a.ttl.erster.cacheRead))) ?? 0;
+  let kandidaten = 0;
+  let ersparnis = 0;
+  for (const a of mitErstem) {
+    if (istWarm(a.ttl.erster) || !a.sessions[0]) continue;
+    if (!istWarmstartKandidat(a, mitErstem.filter((o) => o !== a && o.sessions[0] === a.sessions[0]))) continue;
+    kandidaten += 1;
+    ersparnis += warmstartErsparnis(a.ttl.erster, Math.min(num(a.ttl.erster.cacheWrite), sockel));
+  }
+  return { kandidaten, sockel, ersparnis };
+}
+
+/**
+ * Gegenrechnung der 1h-TTL für eine Rolle (factory#312): Netto = Ist − Simulation, positiv heißt, 1h spart. `empfehlung` 1h nur bei mindestens `TTL_MIN_LAEUFE` Läufen,
+ * Netto der Kette ≥ 0 und Netto mit Warmstart > 0. Offene Läufe zählen nur in `offen`.
+ */
+export function ttlGegenrechnung(alle) {
+  const analysen = alle.filter((a) => !a.offen && a.ttl);
+  const summeVon = (feld) => summe(analysen.map((a) => a.ttl[feld]));
+  const ws = warmstart(analysen);
+  const ist = summeVon("ist");
+  const sim = summeVon("sim");
+  const simMitWarmstart = sim - ws.ersparnis;
+  const netto = ist - sim;
+  const nettoMitWarmstart = ist - simMitWarmstart;
+  return {
+    laeufe: analysen.length,
+    sessions: [...new Set(analysen.flatMap((a) => a.sessions))].sort(),
+    offen: alle.filter((a) => a.offen).length,
+    calls: summeVon("calls"),
+    uebersprungen: summeVon("uebersprungen"),
+    pausenUeber5: summeVon("pausenUeber5"),
+    neuaufbauUeber5: summeVon("neuaufbauUeber5"),
+    vermeidbar: summeVon("vermeidbar"),
+    ueber60: summeVon("ueber60"),
+    warmstart: { kandidaten: ws.kandidaten, sockel: ws.sockel },
+    ist,
+    sim,
+    simMitWarmstart,
+    netto,
+    nettoMitWarmstart,
+    empfehlung: analysen.length >= TTL_MIN_LAEUFE && netto >= 0 && nettoMitWarmstart > 0 ? "1h" : "5m",
+    preisStand: PRICES_STAND,
+  };
+}
+
 /** Kennzahlen eines Laufs (`{ meta, zeilen }`), `null` ohne Call. `namen` (Ticket-Namen aus der Projekt-Config) ist Pflicht, ohne wirft `laufAus`. */
 export function analysiereLauf(lauf, { wurzel = null, namen } = {}) {
   const kopf = laufAus(lauf, namen);
@@ -233,6 +357,7 @@ export function analysiereLauf(lauf, { wurzel = null, namen } = {}) {
     ergebnisse,
     neuaufbauten: neuaufbauten(eintraege, namen),
     pausen: wartepausen(eintraege, namen),
+    ttl: ttlLauf(eintraege),
     wachstum,
   };
 }
@@ -408,15 +533,9 @@ function jeTicketBericht(agent, analysen, { von, bis }) {
   };
 }
 
-/**
- * Kern: Läufe des Typs im Start-Fenster [von, bis] (optional nur/ohne bestimmte Tickets) → Bericht je Gruppe (alle, ohne Sammeltickets, Sammeltickets).
- * `delta` (true = nur Läufe mit Delta-Patch-Pfad im Prompt, false = nur ohne) und `brille` (Name wie in `laufAus`, z. B. `Architektur`) filtern zusätzlich (#1582).
- * @param {{ laeufe: { meta: object, zeilen: object[] }[], namen: object, agent?: string, von?: string, bis?: string, tickets?: number[], ohne?: number[], delta?: boolean|null, brille?: string|null, jeTicket?: boolean }} e
- * `jeTicket` (#1592): alle Läufe eines Tickets sind ein Lauf (Vorgänger und Nachfolger nach einer Übergabe), das Fenster gilt für den ersten Start.
- */
-export function kontextTreiber({ laeufe, namen, agent = namen?.agenten?.umsetzer, von, bis, tickets = [], ohne = [], wurzel = null, delta = null, brille = null, jeTicket = false }) {
-  if (typeof agent !== "string" || agent === "") throw new Error("kontextTreiber braucht den Agenten-Typ: `agent` oder namen.agenten.umsetzer");
-  const analysen = laeufe
+/** Läufe des Typs im Start-Fenster, nach Ticket, Delta und Brille gefiltert (gemeinsame Vorstufe der Berichte). */
+function gefilterteAnalysen(laeufe, { namen, agent, von, bis, tickets, ohne, wurzel, delta, brille, jeTicket }) {
+  return laeufe
     .filter((l) => l?.meta?.agentType === agent)
     .map((l) => analysiereLauf(l, { wurzel, namen }))
     .filter(Boolean)
@@ -424,7 +543,25 @@ export function kontextTreiber({ laeufe, namen, agent = namen?.agenten?.umsetzer
     .filter((a) => passtTicketFilter(a.ticket, { tickets, ohne }))
     .filter((a) => delta === null || a.delta === delta)
     .filter((a) => !brille || a.brille === brille);
+}
+
+/** Je-Ticket-Bericht oder TTL-Gegenrechnung statt der Kennzahlen je Gruppe; `null`, wenn keiner von beiden gefragt ist. */
+function sonderBericht({ agent, analysen, von, bis, jeTicket, ttl }) {
   if (jeTicket) return jeTicketBericht(agent, analysen, { von, bis });
+  return ttl ? { agent, von: von ?? null, bis: bis ?? null, ttl: ttlGegenrechnung(analysen) } : null;
+}
+
+/**
+ * Kern: Läufe des Typs im Start-Fenster [von, bis] (optional nur/ohne bestimmte Tickets) → Bericht je Gruppe (alle, ohne Sammeltickets, Sammeltickets).
+ * `delta` (true = nur Läufe mit Delta-Patch-Pfad im Prompt, false = nur ohne) und `brille` (Name wie in `laufAus`, z. B. `Architektur`) filtern zusätzlich (#1582).
+ * @param {{ laeufe: { meta: object, zeilen: object[] }[], namen: object, agent?: string, von?: string, bis?: string, tickets?: number[], ohne?: number[], delta?: boolean|null, brille?: string|null, jeTicket?: boolean }} e
+ * `jeTicket` (#1592): alle Läufe eines Tickets sind ein Lauf (Vorgänger und Nachfolger nach einer Übergabe), das Fenster gilt für den ersten Start.
+ */
+export function kontextTreiber({ laeufe, namen, agent = namen?.agenten?.umsetzer, von, bis, tickets = [], ohne = [], wurzel = null, delta = null, brille = null, jeTicket = false, ttl }) {
+  if (typeof agent !== "string" || agent === "") throw new Error("kontextTreiber braucht den Agenten-Typ: `agent` oder namen.agenten.umsetzer");
+  const analysen = gefilterteAnalysen(laeufe, { namen, agent, von, bis, tickets, ohne, wurzel, delta, brille, jeTicket });
+  const sonder = sonderBericht({ agent, analysen, von, bis, jeTicket, ttl });
+  if (sonder) return sonder;
   return {
     agent,
     laeufe: laeufeListe(analysen),
@@ -490,6 +627,7 @@ function renderLaeufe(laeufe) {
 
 /** Markdown-Bericht (Top-10, Phasen, Neuaufbau) je Gruppe. */
 export function renderMarkdown(r) {
+  if (r.ttl) return renderTtl(r);
   if (r.jeTicket) {
     const kopf = `Kontext-Treiber \`${r.agent}\` je Ticket (Läufe eines Tickets zusammengelegt; ohne Ticket: ${r.ohneTicket}, Nachfolger ohne Vorgänger: ${r.ohneVorgaenger}, offen: ${r.gesamt.offen})`;
     const gruppen = [
@@ -505,18 +643,59 @@ export function renderMarkdown(r) {
   return [`Kontext-Treiber \`${r.agent}\` (offen: ${r.gesamt.offen})`, "", ...renderGruppe("Alle Läufe", r.gesamt), ...renderGruppe("Ohne Sammeltickets", r.ohneSammel), ...renderGruppe("Sammeltickets", r.sammel), ...renderLaeufe(r.laeufe)].join("\n");
 }
 
+const usd = (x) => x.toFixed(4).replace(".", ",");
+
+/** Markdown-Block der TTL-Gegenrechnung (factory#312): Fenster, Preisstand, Rohwerte, Ist, Simulation, Netto. */
+function renderTtl(r) {
+  const t = r.ttl;
+  return [
+    `TTL-Gegenrechnung \`${r.agent}\` (Fenster ${r.von ?? "-"} bis ${r.bis ?? "-"}, Preisstand ${t.preisStand})`,
+    "",
+    `- Läufe: ${t.laeufe} (offen: ${t.offen}), Sessions: ${t.sessions.length}`,
+    `- Calls: ${t.calls} (übersprungen ohne Zeit oder Preis: ${t.uebersprungen})`,
+    `- Pausen über 5 min: ${t.pausenUeber5}, davon Neuaufbau: ${t.neuaufbauUeber5}, vermeidbar (bis 60 min): ${t.vermeidbar}, Pausen über 60 min: ${t.ueber60}`,
+    `- Warmstart über Läufe: ${t.warmstart.kandidaten} Kandidaten, Sockel ${t.warmstart.sockel} Tokens`,
+    `- Ist (5m) in $: ${usd(t.ist)}`,
+    `- Simulation 1h in $: Kette ${usd(t.sim)}, mit Warmstart ${usd(t.simMitWarmstart)}`,
+    `- Netto in $ (positiv: 1h spart): Kette ${usd(t.netto)}, mit Warmstart ${usd(t.nettoMitWarmstart)}`,
+    `- Empfehlung: ${t.empfehlung} (1h nur bei mindestens ${TTL_MIN_LAEUFE} Läufen, Netto der Kette ≥ 0 und Netto mit Warmstart > 0)`,
+    "",
+  ].join("\n");
+}
+
 // ── CLI (dünn, ungetestet: Dateisuche) ───────────────────────────────────────
+
+/** `--ttl` übernehmen; zusammen mit `--je-ticket` oder mehreren `--agent` ist es ein Aufruf-Fehler (die TTL-Rechnung kennt keine zusammengelegten Tickets und keine Typ-Berichte). */
+function ttlFlag(werte, a) {
+  if (werte.ttl !== true) return;
+  a.ttl = true;
+  if (a.jeTicket) a.fehler ??= "--ttl und --je-ticket schließen sich aus";
+  if (a.agenten) a.fehler ??= "--ttl und mehrere --agent schließen sich aus";
+}
+
+/** Erster `--von`/`--bis`-Wert, der kein ISO-Zeitpunkt ist (`Date.parse` NaN), als Aufruf-Fehler; sonst undefined. */
+function zeitpunktFehler(werte) {
+  const name = ["von", "bis"].find((n) => werte[n] !== undefined && Number.isNaN(Date.parse(werte[n])));
+  return name && `--${name} erwartet einen ISO-Zeitpunkt, nicht ${werte[name]}`;
+}
+
+/** `--agent` (wiederholbar, factory#235): `agent` ist der erste Typ (Standard `agenten.umsetzer`), `agenten` die Liste ab zwei verschiedenen Typen. */
+function agentenAus(werte, namen) {
+  const typen = [...new Set(werte.agent ?? [])];
+  return { agent: typen[0] ?? namen?.agenten?.umsetzer, ...(typen.length > 1 ? { agenten: typen } : {}) };
+}
 
 /** `namen` liefert den Standard-Agenten (`agenten.umsetzer`), wenn `--agent` fehlt. */
 export function parseArgs(argv, namen) {
-  const optionen = { von: { type: "string" }, bis: { type: "string" }, agent: { type: "string" }, ...TICKET_OPTIONEN, projekt: { type: "string" }, brille: { type: "string" }, delta: { type: "string" }, "je-ticket": { type: "boolean" }, json: { type: "boolean" } };
+  const optionen = { von: { type: "string" }, bis: { type: "string" }, agent: { type: "string", multiple: true }, ...TICKET_OPTIONEN, projekt: { type: "string" }, brille: { type: "string" }, delta: { type: "string" }, "je-ticket": { type: "boolean" }, ttl: { type: "boolean" }, json: { type: "boolean" } };
   const { werte, fehler } = flagsLesen(argv, optionen, { meldung: ticketMeldung });
   // Eine Nicht-Ganzzahl wäre NaN und würde still nichts filtern: Aufruf-Fehler statt falscher Teilmenge.
   const { tickets, ohne, fehler: ticketFehler } = ticketFilterAus(werte);
-  const a = { agent: werte.agent ?? namen?.agenten?.umsetzer, tickets, ohne, json: werte.json === true };
+  const a = { ...agentenAus(werte, namen), tickets, ohne, json: werte.json === true };
   for (const name of ["von", "bis", "projekt", "brille"]) if (werte[name] !== undefined) a[name] = werte[name];
   if (werte["je-ticket"] === true) a.jeTicket = true;
-  const gefunden = fehler?.text ?? ticketFehler;
+  ttlFlag(werte, a);
+  const gefunden = [fehler?.text, ticketFehler, zeitpunktFehler(werte)].find(Boolean);
   if (gefunden) a.fehler = gefunden;
   const delta = werte.delta;
   if (delta !== undefined && delta !== "ja" && delta !== "nein") a.fehler ??= `--delta erwartet ja|nein, nicht ${delta}`;
@@ -525,7 +704,20 @@ export function parseArgs(argv, namen) {
 }
 
 /**
- * Das CLI als Funktion: gibt den Exit-Code zurück (0 ok, 1 Projekt-Config nicht nutzbar, 2 Aufruf-Fehler). Die Namen kommen aus der Projekt-Config
+ * Mehrere Typen (factory#235): je Typ ein Bericht; Tickets mit Läufen in mehr als einem Typ sind ungültig und zählen in keinem (zweiter Durchlauf mit erweitertem `ohne`).
+ * @param {{ laeufeJeTyp: Record<string, object[]> } & object} e wie `kontextTreiber`, statt `laeufe`/`agent` die Läufe je Typ
+ * @returns {{ agenten: Record<string, object>, ungueltig: { ticket: number, grund: string, typen: string[] }[] }}
+ */
+export function kontextTreiberJeTyp({ laeufeJeTyp, ohne = [], ...rest }) {
+  const lauf = (extra) => Object.fromEntries(Object.entries(laeufeJeTyp).map(([agent, laeufe]) => [agent, kontextTreiber({ ...rest, laeufe, agent, ohne: [...ohne, ...extra] })]));
+  const typenJe = new Map();
+  for (const [typ, b] of Object.entries(lauf([]))) for (const l of b.laeufe ?? []) if (l.ticket) typenJe.set(l.ticket, [...(typenJe.get(l.ticket) ?? []), typ]);
+  const ungueltig = armeZuordnen(typenJe).ungueltig;
+  return { agenten: ungueltig.length ? lauf(ungueltig.map((u) => u.ticket)) : lauf([]), ungueltig };
+}
+
+/**
+ * Das CLI als Funktion: gibt den Exit-Code zurück (0 ok, 1 Projekt-Config nicht nutzbar, 2 Aufruf-Fehler, 3 ungültige Zuordnung bei mehreren `--agent`). Die Namen kommen aus der Projekt-Config
  * (`config` ersetzt das Laden, Test) und werden vor allem anderen geprüft: ohne `agenten.umsetzer` liest es kein Transkript.
  */
 export function hauptlauf(argv, { config, ordner = projektOrdner, ladeTyp = ladeLaeufe, wurzel = hauptrepoWurzel, out = console.log, err = console.error } = {}) {
@@ -538,14 +730,24 @@ export function hauptlauf(argv, { config, ordner = projektOrdner, ladeTyp = lade
   const args = parseArgs(argv, namen);
   if (args.fehler || !args.von) {
     if (args.fehler) err(args.fehler);
-    err(`Aufruf: node scripts/kontext-treiber.mjs --von <ISO> [--bis <ISO>] [--agent ${namen.agenten.umsetzer}] [--ticket <nr>]… [--ohne <nr>]… [--delta ja|nein] [--brille <name>] [--projekt <slug>] [--je-ticket] [--json]`);
+    err(`Aufruf: node scripts/kontext-treiber.mjs --von <ISO> [--bis <ISO>] [--agent ${namen.agenten.umsetzer}]… [--ticket <nr>]… [--ohne <nr>]… [--delta ja|nein] [--brille <name>] [--projekt <slug>] [--je-ticket | --ttl] [--json]`);
     return 2;
   }
   const dir = ordner(args.projekt);
   readdirSync(dir);
-  const bericht = kontextTreiber({ laeufe: ladeTyp(dir, args.agent, ladeVon(args.von, Boolean(args.jeTicket))), namen, agent: args.agent, von: args.von, bis: args.bis, tickets: args.tickets, ohne: args.ohne, wurzel: wurzel(), delta: args.delta ?? null, brille: args.brille ?? null, jeTicket: Boolean(args.jeTicket) });
+  if (args.agenten) return mehrTypLauf({ args, dir, namen, ladeTyp, wurzel, out });
+  const bericht = kontextTreiber({ laeufe: ladeTyp(dir, args.agent, ladeVon(args.von, Boolean(args.jeTicket))), namen, agent: args.agent, von: args.von, bis: args.bis, tickets: args.tickets, ohne: args.ohne, wurzel: wurzel(), delta: args.delta ?? null, brille: args.brille ?? null, jeTicket: Boolean(args.jeTicket), ttl: Boolean(args.ttl) });
   out(args.json ? JSON.stringify(bericht, null, 2) : renderMarkdown(bericht));
   return 0;
+}
+
+/** Mehrere `--agent` (factory#235): Bericht je Typ, Exit 3 bei ungültig zugeordneten Tickets (Liste auf stderr, `--json` trägt sie im Bericht). */
+function mehrTypLauf({ args, dir, namen, ladeTyp, wurzel, out }) {
+  const laeufeJeTyp = Object.fromEntries(args.agenten.map((typ) => [typ, ladeTyp(dir, typ, ladeVon(args.von, Boolean(args.jeTicket)))]));
+  const bericht = kontextTreiberJeTyp({ laeufeJeTyp, namen, von: args.von, bis: args.bis, tickets: args.tickets, ohne: args.ohne, wurzel: wurzel(), delta: args.delta ?? null, brille: args.brille ?? null, jeTicket: Boolean(args.jeTicket) });
+  const meldung = bericht.ungueltig.map((u) => `#${u.ticket} (${u.typen.join(" + ")})`).join(", ");
+  out(args.json ? JSON.stringify(bericht, null, 2) : [...Object.values(bericht.agenten).map(renderMarkdown), ...(meldung ? [`Ungültig (Läufe in mehreren Typen, aus allen Berichten ausgenommen): ${meldung}`] : [])].join("\n\n"));
+  return bericht.ungueltig.length ? 3 : 0;
 }
 
 if (istDirektaufruf(import.meta.url)) process.exitCode = hauptlauf(process.argv.slice(2));
