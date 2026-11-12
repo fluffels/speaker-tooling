@@ -9,26 +9,30 @@
  * Lens-Trefferquote je Brille und der Anteil ohne Nacharbeit. Dazu je PR die Abnahme (`{durchgaenge}` | "entfaellt" | "override" | null) und die Quote im ersten Durchgang. Definitionen und Grenzen: docs/model-routing.md
  * › Ergebnis je Ticket-Lauf.
  *
- *   node scripts/lauf-ergebnis.mjs --von <ISO> --bis <ISO> [--ticket <nr>…] [--ohne <nr>…] [--start-agent <typ>] [--json]
+ *   node scripts/lauf-ergebnis.mjs --von <ISO> --bis <ISO> [--ticket <nr>…] [--ohne <nr>…] [--start-agent <typ>] [--je-agent <typ>…] [--json]
  *
  * `--start-agent <typ>` (#1646): statt aller PRs im Fenster nur die der Tickets, deren erster Lauf dieses Subagent-Typs in [von, bis] startet
  * (aus den lokalen Transkripten, 48 h Vorlauf beim Laden). PRs ohne Ticket und Tickets mit früherem Start fallen heraus; `--ohne` bleibt kombinierbar,
  * `--ticket` nicht. `von`/`bis` gelten zugleich für den Merge-Zeitpunkt. Fehlen die Transkripte des Typs, bricht das Skript ab (Exit 2).
  *
+ * `--je-agent <typ>` (wiederholbar, factory#235, A/B Kern je Rolle): die Kennzahlen zusätzlich je Subagent-Typ (`jeAgent: { <typ>: { zeilen, kennzahlen } }`). Ein Ticket gehört zu dem Typ, in dem es Läufe hat
+ * (aus den lokalen Transkripten, 48 h Vorlauf, Zuordnung wie `laufAus`); hat es Läufe in mehreren der Typen oder in keinem, ist es `ungueltig` (`{ticket, grund: beide|keiner, typen}`), zählt in keiner Gruppe und setzt Exit 3. PRs ohne Ticket zählen nicht.
+ *
  * Exit 0 ok, 1 falscher Aufruf, 2 unvollständige Daten (nie still 0: abgeschnittene PR-Liste, lokal fehlender
- * Merge-Commit, gh-/git-Fehler). Reines Node-Skript; der Kern ist pur, git/gh sind injizierbar (Test).
+ * Merge-Commit, gh-/git-Fehler), 3 ungültige Typ-Zuordnung bei `--je-agent`. Reines Node-Skript; der Kern ist pur, git/gh sind injizierbar (Test).
  */
 import { istDirektaufruf } from "./direktaufruf.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { labelAus, ladeProjektConfig, repoOwner } from "./projekt-config-lib.mjs";
 import { aktiverOverride, commitZeilenAus } from "./slice-override.mjs";
-import { hoechsterAbnahmeDurchgang, parseNachweis } from "./nachweis-lib.mjs";
+import { hoechsterAbnahmeDurchgang, parseNachweis, URSACHEN } from "./nachweis-lib.mjs";
 import { issueKommentare } from "./fremdtext-lib.mjs";
 import { passtTicketFilter, TICKET_OPTIONEN, ticketFilterAus, ticketMeldung } from "./mess-lib.mjs";
 import { flagsLesen } from "./flag-lib.mjs";
 import { distinctRoteShas, ghText, holeRoteLaeufe } from "./ci-laeufe.mjs";
 import { ladeLaeufe, laufAus, mitVorlauf, ticketsMitStartImFenster } from "./subagent-laeufe.mjs";
+import { armeZuordnen } from "./lens-arm-lib.mjs";
 import { ticketNamen } from "./ticket-namen.mjs";
 import { projektOrdner } from "./transkript.mjs";
 
@@ -65,6 +69,11 @@ export function ticketVon(pr) {
   return alle.length > 0 ? Number(alle[alle.length - 1][1]) : null;
 }
 
+/** Ist die Nacharbeitsfrist (Merge + NACHARBEIT_TAGE) bei `jetzt` abgelaufen? Einzige Fristberechnung, auch Quelle der Folge-Quote im Abo-Kontingent. Pure. */
+export function fristAbgelaufen({ mergedAt, jetzt }) {
+  return jetzt.getTime() >= new Date(mergedAt).getTime() + NACHARBEIT_TAGE * TAG_MS;
+}
+
 /** Nacharbeit nach dem Merge: 'revert' | 'folge' | 'nein' | 'offen' (Fenster läuft noch, kein Treffer). Pure. */
 export function nacharbeitVon({ pr, ticket, mergeSha, mergedAt, commits, jetzt }) {
   const von = new Date(mergedAt).getTime();
@@ -78,7 +87,7 @@ export function nacharbeitVon({ pr, ticket, mergeSha, mergedAt, commits, jetzt }
     const folge = [...c.body.matchAll(/^Folge #(\d+)\b/gm)].some((m) => Number(m[1]) === ticket || Number(m[1]) === pr);
     if (folge) return "folge";
   }
-  return jetzt.getTime() < bis ? "offen" : "nein";
+  return fristAbgelaufen({ mergedAt, jetzt }) ? "nein" : "offen";
 }
 
 /** Anzahl distinct Head-SHAs roter CI-Läufe zwischen PR-Erstellung und Merge (Zählung: ci-laeufe.mjs). Pure. */
@@ -114,10 +123,10 @@ export function festgefahrenAusAntwort(antwort, nummern, label) {
   return out;
 }
 
-/** Abnahme eines PRs aus dem Merge-Body: `"override"` (hat Vorrang, wie im Gate; ein Widerruf hebt ihn auf), `{durchgaenge}` bei gültigem Urteil, `"entfaellt"`, sonst `null` (keine oder ungültige Zeile). Pure. */
+/** Abnahme eines PRs aus dem Merge-Body: `"override"` (hat Vorrang, wie im Gate; ein Widerruf hebt ihn auf), `{durchgaenge, ursachen}` bei gültigem Urteil (`ursachen`: Klasse → Anzahl, `{}` ohne Feld), `"entfaellt"`, sonst `null` (keine oder ungültige Zeile). Pure. */
 export function abnahmeVon(body, abnahme, zeilen) {
   if (aktiverOverride(body, zeilen.abnahmeOverride) !== null) return "override";
-  if (abnahme?.art === "urteil") return { durchgaenge: abnahme.durchgaenge };
+  if (abnahme?.art === "urteil") return { durchgaenge: abnahme.durchgaenge, ursachen: abnahme.ursachen ?? {} };
   if (abnahme?.art === "entfaellt") return "entfaellt";
   return null;
 }
@@ -140,8 +149,14 @@ export function bewertePrs({ prs, commits, ci, festgefahren, jetzt, konfigZeilen
       ciFix: ciFixRunden(ci[pr.number] ?? [], pr.createdAt, pr.mergedAt),
       festgefahren: festgefahren[pr.number] ?? 0,
       nacharbeit: nacharbeitVon({ pr: pr.number, ticket, mergeSha, mergedAt: pr.mergedAt, commits, jetzt }),
+      fristAbgelaufen: fristAbgelaufen({ mergedAt: pr.mergedAt, jetzt }),
     };
   });
+  return { zeilen: eintraege, kennzahlen: kennzahlenAus(eintraege, offenMitFix) };
+}
+
+/** Kennzahlen aus bewerteten Zeilen (`bewertePrs`); auch je Typ-Gruppe bei `--je-agent`. Pure. */
+export function kennzahlenAus(eintraege, offenMitFix = 0) {
   const mitNachweis = eintraege.filter((z) => z.runden !== null);
   const brillen = {};
   for (const z of mitNachweis) {
@@ -157,37 +172,39 @@ export function bewertePrs({ prs, commits, ci, festgefahren, jetzt, konfigZeilen
   const zaehle = (art) => eintraege.filter((z) => z.nacharbeit === art).length;
   const abgelaufen = eintraege.filter((z) => z.nacharbeit !== "offen");
   return {
-    zeilen: eintraege,
-    kennzahlen: {
-      prs: eintraege.length,
-      ohneNachweis: eintraege.length - mitNachweis.length,
-      ohneBlockerFeld: mitNachweis.filter((z) => z.blocker === null).length,
-      // Echte Zählung (#1609): PRs mit `blocker=`-Feld, in denen eine Brille in Runde 1 mindestens einen Blocker hatte; der Proxy (Runden ≥ 2) bleibt zum Vergleich.
-      runde1MitBlocker: mitNachweis.filter((z) => z.blocker?.some((b) => b.n > 0)).length,
-      mitBlockerFeld: mitNachweis.filter((z) => z.blocker !== null).length,
-      runde1MitBlockerProxy: mitNachweis.filter((z) => z.runden >= 2).length,
-      mitNachweis: mitNachweis.length,
-      brillen,
-      ohneNacharbeit: zaehle("nein"),
-      nachweisbareFenster: abgelaufen.length,
-      nacharbeitOffen: zaehle("offen"),
-      ciFixSumme: eintraege.reduce((a, z) => a + z.ciFix, 0),
-      festgefahrenSumme: eintraege.reduce((a, z) => a + z.festgefahren, 0),
-      // Abnahme (ADR 0022 F13): gemessen = PRs mit gültigem Urteil, davon im ersten Durchgang; entfällt/override zählen nicht in die Quote, ohne = keine oder ungültige Zeile.
-      abnahme: {
-        gemessen: eintraege.filter((z) => typeof z.abnahme === "object" && z.abnahme !== null).length,
-        ersterDurchgang: eintraege.filter((z) => z.abnahme?.durchgaenge === 1).length,
-        entfaellt: eintraege.filter((z) => z.abnahme === "entfaellt").length,
-        override: eintraege.filter((z) => z.abnahme === "override").length,
-        ohne: eintraege.filter((z) => z.abnahme === null).length,
+    prs: eintraege.length,
+    ohneNachweis: eintraege.length - mitNachweis.length,
+    ohneBlockerFeld: mitNachweis.filter((z) => z.blocker === null).length,
+    // Echte Zählung (#1609): PRs mit `blocker=`-Feld, in denen eine Brille in Runde 1 mindestens einen Blocker hatte; der Proxy (Runden ≥ 2) bleibt zum Vergleich.
+    runde1MitBlocker: mitNachweis.filter((z) => z.blocker?.some((b) => b.n > 0)).length,
+    mitBlockerFeld: mitNachweis.filter((z) => z.blocker !== null).length,
+    runde1MitBlockerProxy: mitNachweis.filter((z) => z.runden >= 2).length,
+    mitNachweis: mitNachweis.length,
+    brillen,
+    ohneNacharbeit: zaehle("nein"),
+    nachweisbareFenster: abgelaufen.length,
+    nacharbeitOffen: zaehle("offen"),
+    ciFixSumme: eintraege.reduce((a, z) => a + z.ciFix, 0),
+    festgefahrenSumme: eintraege.reduce((a, z) => a + z.festgefahren, 0),
+    // Abnahme (ADR 0022 F13): gemessen = PRs mit gültigem Urteil, davon im ersten Durchgang; entfällt/override zählen nicht in die Quote, ohne = keine oder ungültige Zeile.
+    abnahme: {
+      gemessen: eintraege.filter((z) => typeof z.abnahme === "object" && z.abnahme !== null).length,
+      ersterDurchgang: eintraege.filter((z) => z.abnahme?.durchgaenge === 1).length,
+      entfaellt: eintraege.filter((z) => z.abnahme === "entfaellt").length,
+      override: eintraege.filter((z) => z.abnahme === "override").length,
+      ohne: eintraege.filter((z) => z.abnahme === null).length,
+      // Abnahme-Ursache (factory#260): Σ je Klasse über die Fälle mit Fix; ohne = PRs mit Fix (durchgaenge ≥ 2) ohne Ursachen-Feld (Altbestand).
+      ursachen: {
+        ...Object.fromEntries(URSACHEN.map((u) => [u, eintraege.reduce((a, z) => a + (z.abnahme?.ursachen?.[u] ?? 0), 0)])),
+        ohne: eintraege.filter((z) => z.abnahme?.durchgaenge >= 2 && Object.keys(z.abnahme.ursachen).length === 0).length,
       },
-      // Abnahme-Fix (#1808): PRs mit mehr als einem Abnahme-Durchgang (der Fix nach Urteil `fix`), davon mit Festgefahren-Label (Hand-off).
-      // `mitFix` zählt nur gemergte PRs; der offene Hand-off-PR steht getrennt in `offenMitFix` (nie in `mitFix` addiert).
-      abnahmeFix: {
-        mitFix: eintraege.filter((z) => z.abnahme?.durchgaenge >= 2).length,
-        mitFixUndFestgefahren: eintraege.filter((z) => z.abnahme?.durchgaenge >= 2 && z.festgefahren > 0).length,
-        offenMitFix,
-      },
+    },
+    // Abnahme-Fix (#1808): PRs mit mehr als einem Abnahme-Durchgang (der Fix nach Urteil `fix`), davon mit Festgefahren-Label (Hand-off).
+    // `mitFix` zählt nur gemergte PRs; der offene Hand-off-PR steht getrennt in `offenMitFix` (nie in `mitFix` addiert).
+    abnahmeFix: {
+      mitFix: eintraege.filter((z) => z.abnahme?.durchgaenge >= 2).length,
+      mitFixUndFestgefahren: eintraege.filter((z) => z.abnahme?.durchgaenge >= 2 && z.festgefahren > 0).length,
+      offenMitFix,
     },
   };
 }
@@ -207,6 +224,7 @@ export function formatiere({ zeilen, kennzahlen: k }) {
   out.push(`Ohne Nacharbeit (${NACHARBEIT_TAGE} T): ${prozent(k.ohneNacharbeit, k.nachweisbareFenster)}, Fenster noch offen: ${k.nacharbeitOffen}`);
   const a = k.abnahme;
   out.push(`Abnahme im ersten Durchgang: ${prozent(a.ersterDurchgang, a.gemessen)}; entfällt ${a.entfaellt}, Override ${a.override}, ohne gültige Abnahme-Zeile ${a.ohne}`);
+  out.push(`Abnahme-Ursache (Fälle mit Fix): ${URSACHEN.map((u) => `${u} ${a.ursachen[u]}`).join(", ")}, ohne Ursachen-Feld ${a.ursachen.ohne}`);
   out.push(`Abnahme-Fix: ${k.abnahmeFix.mitFix} PRs, davon mit Hand-off: ${prozent(k.abnahmeFix.mitFixUndFestgefahren, k.abnahmeFix.mitFix)}; offen (Hand-off, nicht gemergt): ${k.abnahmeFix.offenMitFix}`);
   out.push(`Σ CI-Fix-Runden: ${k.ciFixSumme}, Σ festgefahren: ${k.festgefahrenSumme}`);
   return out.join("\n");
@@ -331,23 +349,66 @@ export function ladeStartLaeufe(dir, agent, von) {
   return laeufe;
 }
 
-export const AUFRUFHILFE = "Aufruf: node scripts/lauf-ergebnis.mjs --von <ISO> --bis <ISO> [--ticket <nr>…] [--ohne <nr>…] [--start-agent <typ>] [--json]";
+/**
+ * Kennzahlen je Subagent-Typ (factory#235). `laeufeJeTyp`: `{ typ: [{ meta, zeilen }] }` (geladene Transkripte), `namen` die Ticket-Namen. Tickets der PR-Zeilen in genau einem Typ kommen in `jeAgent[typ]`
+ * (Zeilen und `kennzahlenAus`), die übrigen in `ungueltig`. Pure.
+ */
+export function laufErgebnisJeAgent({ ergebnis, laeufeJeTyp, namen }) {
+  const tickets = new Set(ergebnis.zeilen.map((z) => z.ticket).filter(Boolean));
+  const typenJe = new Map([...tickets].map((nr) => [nr, []]));
+  for (const [typ, laeufe] of Object.entries(laeufeJeTyp)) {
+    for (const nr of new Set(laeufe.map((l) => laufAus(l, namen)?.ticket))) if (typenJe.has(nr)) typenJe.get(nr).push(typ);
+  }
+  const { gruppen, ungueltig } = armeZuordnen(typenJe);
+  const jeAgent = Object.fromEntries(Object.keys(laeufeJeTyp).map((typ) => {
+    const zeilen = ergebnis.zeilen.filter((z) => (gruppen[typ] ?? []).includes(z.ticket));
+    return [typ, { zeilen, kennzahlen: kennzahlenAus(zeilen) }];
+  }));
+  return { ...ergebnis, jeAgent, ungueltig };
+}
+
+/** Lädt die Läufe je Typ ab `von` minus Vorlauf; ein Typ ohne Lauf ist erlaubt (leerer Arm), ein fehlender Ordner ein `DatenFehler`. */
+export function ladeJeAgentLaeufe(dir, typen, von) {
+  if (!existsSync(dir)) throw new DatenFehler("Keine lokalen Transkripte (Projektordner fehlt).");
+  try {
+    return Object.fromEntries(typen.map((typ) => [typ, ladeLaeufe(dir, typ, mitVorlauf(von))]));
+  } catch (e) {
+    throw new DatenFehler(`Transkripte nicht lesbar: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** Markdown für `--je-agent`: je Typ die Tabelle samt Aggregaten, am Ende die ungültigen Tickets. Pure. */
+export function formatiereJeAgent(r) {
+  const gruppen = Object.entries(r.jeAgent).map(([typ, g]) => `## ${typ}: ${g.zeilen.length} Tickets\n\n${formatiere(g)}`);
+  const ungueltig = r.ungueltig.map((u) => `#${u.ticket} (${u.grund === "beide" ? `Läufe in ${u.typen.join(" + ")}` : "kein Lauf der Typen"})`);
+  return [...gruppen, ungueltig.length ? `Ungültig (aus allen Gruppen ausgenommen, \`--ohne\` mit Spur): ${ungueltig.join(", ")}` : "Ungültig: keine"].join("\n\n");
+}
+
+/** `--je-agent` als Funktion (Test): lädt die Läufe, rechnet je Typ, schreibt über `out` und gibt den Exit-Code zurück (0, 3 bei ungültigen Tickets). */
+export function jeAgentAusgabe({ ergebnis, jeAgent, von, dir, namen, json, out = console.log }) {
+  const je = laufErgebnisJeAgent({ ergebnis, laeufeJeTyp: ladeJeAgentLaeufe(dir, jeAgent, von), namen });
+  out(json ? JSON.stringify(je, null, 2) : [formatiere(ergebnis), formatiereJeAgent(je)].join("\n\n"));
+  return je.ungueltig.length > 0 ? 3 : 0;
+}
+
+export const AUFRUFHILFE = "Aufruf: node scripts/lauf-ergebnis.mjs --von <ISO> --bis <ISO> [--ticket <nr>…] [--ohne <nr>…] [--start-agent <typ>] [--je-agent <typ>…] [--json]";
 
 /** Argumente: `--von`, `--bis`, wiederholbar `--ticket <nr>` (nur diese) und `--ohne <nr>` (alle außer diesen), `--json`. `--start-agent <typ>` (kein Default, nicht mit `--ticket`). Eine Nicht-Ganzzahl oder ein fehlender Wert setzt `fehler`. */
 export function parseArgs(argv) {
-  const optionen = { von: { type: "string" }, bis: { type: "string" }, ...TICKET_OPTIONEN, "start-agent": { type: "string" }, json: { type: "boolean" } };
-  const meldung = (art, flag) => (art === "ohne-wert" && flag === "--start-agent" ? "--start-agent erwartet einen Agent-Typ" : ticketMeldung(art, flag));
+  const optionen = { von: { type: "string" }, bis: { type: "string" }, ...TICKET_OPTIONEN, "start-agent": { type: "string" }, "je-agent": { type: "string", multiple: true }, json: { type: "boolean" } };
+  const meldung = (art, flag) => (art === "ohne-wert" && (flag === "--start-agent" || flag === "--je-agent") ? `${flag} erwartet einen Agent-Typ` : ticketMeldung(art, flag));
   const { werte, fehler } = flagsLesen(argv, optionen, { meldung });
   const { tickets, ohne, fehler: ticketFehler } = ticketFilterAus(werte);
   const a = { von: werte.von, bis: werte.bis, tickets, ohne, json: werte.json === true, fehler: fehler?.text ?? ticketFehler };
   if (werte["start-agent"] !== undefined) a.startAgent = werte["start-agent"];
   if (a.startAgent === "") a.fehler ??= "--start-agent erwartet einen Agent-Typ";
+  if (werte["je-agent"] !== undefined) a.jeAgent = [...new Set(werte["je-agent"])];
   if (a.startAgent !== undefined && a.tickets.length > 0) a.fehler ??= "--start-agent und --ticket schließen sich aus";
   return a;
 }
 
 function main(argv) {
-  const { von, bis, tickets, ohne, json, fehler, startAgent } = parseArgs(argv);
+  const { von, bis, tickets, ohne, json, fehler, startAgent, jeAgent } = parseArgs(argv);
   if (fehler || !von || !bis || [von, bis].some((d) => Number.isNaN(new Date(d).getTime()))) {
     console.error(fehler ? [fehler, AUFRUFHILFE].join("\n") : AUFRUFHILFE);
     process.exit(1);
@@ -356,7 +417,8 @@ function main(argv) {
     const run = (cmd) => (args) => execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
     const io = { von, bis, runGit: run("git"), runGh: ghText, ohne };
     const ergebnis = startAgent === undefined ? laufErgebnis({ ...io, tickets }) : laufErgebnisStartAgent({ ...io, laeufe: ladeStartLaeufe(projektOrdner(), startAgent, von) });
-    console.log(json ? JSON.stringify(ergebnis, null, 2) : formatiere(ergebnis));
+    if (jeAgent === undefined) return console.log(json ? JSON.stringify(ergebnis, null, 2) : formatiere(ergebnis));
+    process.exitCode = jeAgentAusgabe({ ergebnis, jeAgent, von, dir: projektOrdner(), namen: ticketNamen(ladeProjektConfig()), json });
   } catch (e) {
     console.error(`✖ lauf-ergebnis: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(2);

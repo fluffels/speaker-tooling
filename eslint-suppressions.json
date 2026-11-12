@@ -36,7 +36,7 @@
   },
   "scripts/check-diffcoverage.mjs": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "scripts/check-diffsize.mjs": {
@@ -195,14 +195,6 @@
   "scripts/mcp-ausfall.mjs": {
     "complexity": {
       "count": 2
-    },
-    "max-depth": {
-      "count": 2
-    }
-  },
-  "scripts/nachweis-lib.mjs": {
-    "complexity": {
-      "count": 1
     }
   },
   "scripts/naechstes-ticket.mjs": {
@@ -267,7 +259,7 @@
   },
   "scripts/token-baseline.mjs": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "scripts/tool-metriken.mjs": {

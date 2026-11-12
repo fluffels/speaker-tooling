@@ -13,6 +13,8 @@ import { ladeRulesetSpiegel } from "./docs-gen/ruleset-spiegel.mjs";
 import { MANIFEST_PFAD, manifestAusText, pflichtChecksFehler, wirdVerteilt } from "./besitz-lib.mjs";
 import { GRENZE_PRIVAT, LINK_ACTIONS, LINK_RULESET, pruefeSicherheit } from "./harness-doctor-sicherheit.mjs";
 import { ausFehler as ausFehlerRoh, gut, luecke, nichtPruefbar } from "./harness-doctor-ergebnis.mjs";
+import { rulesetPunkte } from "./harness-doctor-ruleset.mjs";
+import { istWorkflowDatei } from "./workflow-blockform.mjs";
 import { manifestKenntModule, MODUL_STANDARD, modulFormFehler, modulWahl } from "./modul-wahl-lib.mjs";
 
 /** Links der Anleitungen (nur `--einrichten`): Seiten der GitHub-Doku bzw. des Werkzeugs, je Voraussetzung, die der Doctor nie selbst setzt. */
@@ -60,6 +62,7 @@ export const WOCHENLAUF_WORKFLOW = [
   "permissions:",
   "  contents: read",
   "  issues: write",
+  "  actions: read",
   "",
   "jobs:",
   "  doctor:",
@@ -134,6 +137,14 @@ function kernPflichtChecks({ besitz, workflows }) {
 const vereinigt = (spiegel, kern) => [...new Set([...(spiegel?.requiredChecks ?? []), ...kern])];
 
 /**
+ * Pur: die eine Quelle der Soll-Kontexte (factory#220 L20): Required Checks des Ruleset-Spiegels, dann die `pflichtChecks` der verteilten Kern-Workflows aus dem gelesenen Besitz-Manifest `manifest` (`null`: nicht gelesen, dann nur der Spiegel),
+ * deren Datei in `workflows` liegt. Der Doctor (`voraussetzungenAus`) und der Wächter `required-check-shadowing.test.ts` rechnen beide damit.
+ */
+export function sollKontexte({ spiegel, manifest, workflows }) {
+  return vereinigt(spiegel, manifest ? kernPflichtChecks({ besitz: { wert: manifest }, workflows }).checks : []);
+}
+
+/**
  * Pur: leitet aus Config und Workflows ab, was das Projekt braucht: `{ secrets, optionaleSecrets (gelesen, aber nicht gefordert), variablen, labels, boards, pflichtChecks, besitzFehler, manifest }` (`manifest`: das gelesene Besitz-Manifest oder `null`). `pflichtChecks` ist die Vereinigung aus den
  * Required Checks des Ruleset-Spiegels (zuerst) und den `pflichtChecks` der verteilten Kern-Workflows im Manifest, ohne Doppelte; `besitzFehler` nennt den Grund, wenn das Manifest nicht lesbar ist.
  */
@@ -152,7 +163,7 @@ export function voraussetzungenAus({ config, workflows, spiegel, besitz }) {
     for (const [, wert] of text.matchAll(LABEL_ENV)) if (!wert.includes("${{") && !wert.includes("$")) merke(ohneAnfuehrung(wert));
   }
   const kern = kernPflichtChecks({ besitz, workflows });
-  return { secrets: [...secrets].sort(), optionaleSecrets: [...optionale].sort(), variablen: [...variablen].sort(), labels: [...labels.values()], boards: config.boards ?? [], pflichtChecks: vereinigt(spiegel, kern.checks), besitzFehler: kern.fehler, manifest: kern.manifest };
+  return { secrets: [...secrets].sort(), optionaleSecrets: [...optionale].sort(), variablen: [...variablen].sort(), labels: [...labels.values()], boards: config.boards ?? [], pflichtChecks: sollKontexte({ spiegel, manifest: kern.manifest, workflows }), besitzFehler: kern.fehler, manifest: kern.manifest };
 }
 
 const erste = (e) => fehlerText(e).split("\n")[0];
@@ -370,7 +381,7 @@ export function workflowsLesen(rootDir) {
   const ordner = join(rootDir, ".github", "workflows");
   if (!existsSync(ordner)) return [];
   return readdirSync(ordner)
-    .filter((f) => /\.ya?ml$/.test(f))
+    .filter(istWorkflowDatei)
     .sort()
     .map((f) => ({ pfad: f, text: readFileSync(join(ordner, f), "utf8") }));
 }
@@ -384,12 +395,15 @@ export function konfigFehlerText(e, rootDir = "") {
   return text.includes("Fix:") ? text : `${text}\nFix: Ruleset-Spiegel laut rulesetSpiegel in der Projekt-Config reparieren (Vorlage der Quelle: ${factorySeiteIn(rootDir, RULESET_VORLAGE)}), dann erneut prüfen`;
 }
 
+/** Die lokalen Punkte (`Git-Hooks`, `Board-Ansicht`, factory#247): leer ohne `lokal` (Wochenlauf, `--einrichten`), sonst `lokal({ rootDir, config })` (der Aufrufer verdrahtet die Punkte). */
+const lokalePunkte = ({ lokal, rootDir, config }) => (typeof lokal === "function" ? lokal({ rootDir, config }) : []);
+
 /**
  * Lädt Config und Ruleset-Spiegel und führt alle Prüfpunkte aus: `{ config, ergebnis }`. Wirft bei unlesbarer Config oder unlesbarem Spiegel,
- * bevor ein einziger `gh`-Aufruf läuft. `langfuse: null` lässt den Langfuse-Punkt aus, `dateien: null` die Dateipunkte (`dateien({ rootDir, config, spiegel, workflows, pflichtChecks })` mit der geladenen Config, dem Spiegel, den einmal gelesenen Workflows und der Soll-Liste `voraussetzungen.pflichtChecks` liefert Ergebnisse wie `pruefeDateien`, factory#94, factory#148; der Aufrufer reicht die Funktion am Rand herein), `umgebung: null` den Altnamen-Punkt (`{ env, namen }` prüft ihn: `namen` sind die `FACTORY_…`-Namen aus `kernEnvNamen`, die der Aufrufer am Rand bestimmt; die Lib liest dafür keine Dateien); `mitWochenlauf` rechnet die Vorlage des Wochenlaufs
+ * bevor ein einziger `gh`-Aufruf läuft. `langfuse: null` lässt den Langfuse-Punkt aus, `dateien: null` die Dateipunkte (`dateien({ rootDir, config, spiegel, workflows, pflichtChecks })` mit der geladenen Config, dem Spiegel, den einmal gelesenen Workflows und der Soll-Liste `voraussetzungen.pflichtChecks` liefert Ergebnisse wie `pruefeDateien`, factory#94, factory#148; der Aufrufer reicht die Funktion am Rand herein), ein fehlendes `rulesetLesen` den Punkt `Ruleset-Spiegel` (nur lokal: `rulesetLesen(args)` liest die geparste Antwort des Ruleset-Endpunkts, harness-doctor-ruleset.mjs; `bypass_actors` braucht Admin-Recht), `umgebung: null` den Altnamen-Punkt (`{ env, namen }` prüft ihn: `namen` sind die `FACTORY_…`-Namen aus `kernEnvNamen`, die der Aufrufer am Rand bestimmt; die Lib liest dafür keine Dateien); `mitWochenlauf` rechnet die Vorlage des Wochenlaufs
  * als Workflow mit, falls die Datei fehlt (dann erscheinen ihre Secrets schon im Plan von `--einrichten`).
  */
-export function pruefLauf({ rootDir, configPfad, gh, langfuse = null, mitWochenlauf = false, umgebung = null, dateien = null }) {
+export function pruefLauf({ rootDir, configPfad, gh, langfuse = null, mitWochenlauf = false, umgebung = null, dateien = null, rulesetLesen, lokal }) {
   if (umgebung && !Array.isArray(umgebung.namen)) throw new Error("umgebung braucht { env, namen }: die Kern-Namen bestimmt der Aufrufer am Rand (kernEnvNamen)");
   const config = ladeProjektConfig({ rootDir, pfad: configPfad });
   const spiegel = config.rulesetSpiegel ? ladeRulesetSpiegel(rootDir, config.rulesetSpiegel) : undefined;
@@ -401,6 +415,7 @@ export function pruefLauf({ rootDir, configPfad, gh, langfuse = null, mitWochenl
   const voraussetzungen = voraussetzungenAus({ config, workflows, spiegel, besitz });
   const ergebnis = pruefe({ config, voraussetzungen, spiegel, gh, langfuse, umgebung });
   if (dateien) ergebnis.push(...dateien({ rootDir, config, spiegel, workflows, pflichtChecks: voraussetzungen.pflichtChecks }));
+  ergebnis.push(...rulesetPunkte({ spiegel, repo: config.repo, lesen: rulesetLesen }), ...lokalePunkte({ lokal, rootDir, config }));
   return { config, ergebnis };
 }
 

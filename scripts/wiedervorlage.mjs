@@ -13,9 +13,8 @@
  */
 import { fileURLToPath } from "node:url";
 import { istDirektaufruf } from "./direktaufruf.mjs";
-import { readFileSync } from "node:fs";
 import { fehlerText, ghJson, ghText, tokenFuerZiel } from "./gh-cli.mjs";
-import { inboxStart } from "./inbox-start-lib.mjs";
+import { inboxStart, ladeWiedervorlagen } from "./inbox-start-lib.mjs";
 import { istBezieher } from "./sync-stand-lib.mjs";
 import { bereiteMeldung } from "./meldung-lib.mjs";
 import { gleichesRepo } from "./repo-form.mjs";
@@ -114,8 +113,8 @@ export function ticketText(e) {
 
 // ---- IO (ungetestet) ----
 
-function ladeEintraege() {
-  const liste = JSON.parse(readFileSync(DATEI, "utf8"));
+export function ladeEintraege(lies) {
+  const liste = ladeWiedervorlagen(DATEI, lies);
   const fehler = pruefeEintraege(liste);
   if (fehler.length > 0) throw new Error(`.github/wiedervorlagen.json ungültig:\n- ${fehler.join("\n- ")}`);
   return liste;
@@ -131,8 +130,9 @@ export function anlegeArgumente(e, label, repo) {
   return ["issue", "create", "--repo", repo, "--title", titel, ...(label ? ["--label", label] : []), "--body", body];
 }
 
-function legeAn(e, label, repo, token) {
-  const url = ghText(anlegeArgumente(e, label, repo), { token }).trim();
+/** Legt das Ticket an (`gh issue create`) und liefert seine Nummer aus der ausgegebenen URL. `text` (Test-Naht): der `gh`-Aufruf `(args, { token }) -> Ausgabe`, Standard `ghText`. */
+export function legeAn(e, label, repo, token, text = ghText) {
+  const url = text(anlegeArgumente(e, label, repo), { token }).trim();
   return Number(url.split("/").pop());
 }
 

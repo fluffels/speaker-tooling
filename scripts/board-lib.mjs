@@ -15,6 +15,7 @@ import { brauchtRepo } from "./board-plan-lib.mjs";
 import { istVertraut } from "./fremdtext-lib.mjs";
 import { AUFRUF_EXIT } from "./flag-lib.mjs";
 import { milestoneAus } from "./milestone-lib.mjs";
+import { SAMMELTICKET_TITEL } from "./sammelticket-titel.mjs";
 
 // Repo, Besitzer und Board-IDs kommen aus .factory/projekt.json; fehlt sie oder ist sie ungültig, bricht schon der Import ab (kein stiller
 // Standardwert, #1611): mit einer ✖-Zeile samt Fix und Exit 2 (Config-Fehler wie ein Aufruf-Fehler, AUFRUF_EXIT) statt einem Stacktrace
@@ -77,7 +78,7 @@ export function seitenListen(produkt, factory, config) {
   const falsch = [];
   for (const [board, liste] of [["produkt", produkt], ["factory", factory]]) {
     for (const i of liste) {
-      const soll = boardRolleFuer(i.labels ?? [], config);
+      const soll = boardRolleFuer(i.labels ?? [], config, { repo: i.repo });
       if (board === soll) richtig[soll].push(i);
       else if (!beide.has(i.number)) {
         verirrt[soll].push(i);
@@ -102,7 +103,7 @@ export function umzugsPlan(produkt, factory, config, repo) {
   const gemeldet = [];
   for (const [von, liste] of [["produkt", produkt], ["factory", factory]]) {
     for (const i of liste) {
-      const nach = boardRolleFuer(i.labels ?? [], config);
+      const nach = boardRolleFuer(i.labels ?? [], config, { repo: i.repo || repo });
       if (i.state !== "open" || nach === von) continue;
       const fremd = fremdesBoardText(nach, i.repo || repo, config);
       if (fremd) {
@@ -173,17 +174,7 @@ export function planPlacements(items, numbers, afterNumber = null) {
   return { steps, missing, anchorMissing: false };
 }
 
-/** Titel des Sammeltickets für Harness-Befunde (AGENTS.md § Harness-Befunde sind Zeilen). */
-export const SAMMELTICKET_TITEL = "Harness-Härtung (gesammelt)";
-
-/** Titel des Sammeltickets für Langfuse-Befunde (Mechanik: docs/ticket-reihenfolge.md). */
-export const LANGFUSE_SAMMELTICKET_TITEL = "Langfuse-Befunde (gesammelt)";
-
-/** Titel des freiwilligen Sammeltickets für Codequalität außerhalb des Slices (im eigenen Repo des Beziehers, nur mit `labels.codequalitaet`; Mechanik: docs/ticket-reihenfolge.md). */
-export const CODEQUALITAET_SAMMELTICKET_TITEL = "Codequalität (gesammelt)";
-
-/** Alle Sammeltickets, die das Einsortieren kennt (die Ankersuche und das Einsortieren kennen alle, nicht nur das Harness-Sammelticket). */
-export const SAMMELTICKET_TITEL_LISTE = [SAMMELTICKET_TITEL, LANGFUSE_SAMMELTICKET_TITEL, CODEQUALITAET_SAMMELTICKET_TITEL];
+export { CODEQUALITAET_SAMMELTICKET_TITEL, LANGFUSE_SAMMELTICKET_TITEL, SAMMELTICKET_TITEL, SAMMELTICKET_TITEL_LISTE } from "./sammelticket-titel.mjs";
 
 /** Die Kandidaten (offen laut Liste aus `normalizeOffene`, exakter Titel, ungeclaimt) in absteigender Nummer (das jüngste zuerst). `nach`: der Vorgänger (`--vorgaenger`); nur strikt jüngere Tickets zählen (der Vorgänger und ältere Tickets davor sind kein „schon vorhanden“). Pur. */
 export function kandidatenSammelticket(offene, titel, { nach = null } = {}) {
@@ -221,8 +212,10 @@ export const NOTFAELLE = [
   { art: "wiedervorlage", marker: "⏰ Wiedervorlage:", quelle: "scripts/wiedervorlage.mjs" },
   // Der Titel entsteht in scripts/secret-inbox.mjs (wöchentliches Prüf-Ticket für die Security-Tabs, #92).
   { art: "security-tabs", marker: "🔍 Security-Tabs prüfen", quelle: "scripts/secret-inbox.mjs" },
-  // Der Titel entsteht in scripts/tag-takt.mjs (Release-Tag setzen und syncen, #103).
+  // Der Titel entsteht in scripts/tag-takt.mjs (Release-Tag setzen, #103).
   { art: "tag", marker: "🏷️ Tag ", quelle: "scripts/tag-takt.mjs" },
+  // Der Titel entsteht im Wochenlauf .github/workflows/factory-update.yml (neuer Factory-Release für Bezieher).
+  { art: "update", marker: "🔄 Factory-Update", quelle: ".github/workflows/factory-update.yml" },
 ];
 
 /** Arten für `--notfall`, abgeleitet aus `NOTFAELLE`. */

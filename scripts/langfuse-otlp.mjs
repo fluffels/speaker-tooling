@@ -6,8 +6,18 @@
  * beginnt NICHT mit `langfuse-sdk`, sonst stuft Langfuse die Spans als SDK-Spans ein.
  */
 
+import { createHash } from "node:crypto";
 import { priceParts, sumParts } from "./preise.mjs";
-import { subagentSpanId, traceIdVon } from "./langfuse-abgleich-kern.mjs";
+
+const sha = (text) => createHash("sha256").update(text).digest("hex");
+/** Observation-ID: 16 Hex, deterministisch aus Session und Message (idempotentes Nachtragen in 2/3). */
+export const beobachtungsId = (session, messageId) => sha(session + messageId).slice(0, 16);
+/** Trace-ID: 32 Hex, je Session ein Abgleich-Trace. */
+export const traceIdVon = (session) => sha(session).slice(0, 32);
+/** Span-ID eines Subagenten: 16 Hex, deterministisch aus Session und Agent-ID (Nachliefern sendet den Span je Session einmal). */
+export const subagentSpanId = (session, agentId) => sha(session + "agent:" + agentId).slice(0, 16);
+/** Score-ID: 32 Hex, deterministisch aus Name und Session (Upsert statt Dublette). */
+export const scoreId = (session, name) => sha("score:" + name + ":" + session).slice(0, 32);
 
 /** Scope- und Service-Name der Abgleich-Spans: `<Repo-Name>-abgleich` (Repo-Name aus `repo` der Projekt-Config). */
 export const scopeName = (repoName) => `${repoName}-abgleich`;
@@ -77,14 +87,26 @@ const span = ({ traceId, spanId, parentSpanId, name, start, ende, attributes }) 
   attributes,
 });
 
-/** Eine Generation; `ctx` = `{ traceAttrs, parentSpanId? }`. Ohne Modell entfallen Modellname und Kosten, ohne Preis die Kosten. */
-export function generationSpan(e, { traceAttrs, parentSpanId = null }) {
+const ZUORDNUNGS_SCHLUESSEL = ["agent_type", "effort", "thinking"];
+
+/**
+ * Zuordnungs-Metadaten einer Generation (factory#287): `agent_type`, `effort`, `thinking` aus `z` (`zuordnungen` in `transkript-calls.mjs`),
+ * `repo` aus `repoName`. Ein Wert, der nicht bestimmt ist (fehlt oder leer), erzeugt keinen Schlüssel: nie raten, nie eine Rolle erfinden.
+ */
+export function zuordnungsAttribute(z, repoName) {
+  const out = ZUORDNUNGS_SCHLUESSEL.filter((k) => typeof z?.[k] === "string" && z[k] !== "").map((k) => attr(`langfuse.observation.metadata.${k}`, z[k]));
+  if (typeof repoName === "string" && repoName !== "") out.push(attr("langfuse.observation.metadata.repo", repoName));
+  return out;
+}
+
+/** Eine Generation; `ctx` = `{ traceAttrs, parentSpanId?, repoName? }`. Ohne Modell entfallen Modellname und Kosten, ohne Preis die Kosten. */
+export function generationSpan(e, { traceAttrs, parentSpanId = null, repoName }) {
   const attributes = [attr("langfuse.observation.type", "generation")];
   if (e.model) attributes.push(attr("langfuse.observation.model.name", e.model));
   attributes.push(attr("langfuse.observation.usage_details", JSON.stringify(usageDetails(e.usage))));
   const kosten = e.model ? costDetails(e) : null;
   if (kosten) attributes.push(attr("langfuse.observation.cost_details", JSON.stringify(kosten)));
-  attributes.push(attr("langfuse.observation.metadata.message_id", e.messageId), attr("langfuse.observation.metadata.quelle", "abgleich"), ...traceAttrs);
+  attributes.push(attr("langfuse.observation.metadata.message_id", e.messageId), attr("langfuse.observation.metadata.quelle", "abgleich"), ...zuordnungsAttribute(e.zuordnung, repoName), ...traceAttrs);
   return span({ traceId: e.traceId, spanId: e.id, parentSpanId, name: "Call", start: nanos(e.ts), ende: nanos(e.ts), attributes });
 }
 
@@ -165,7 +187,7 @@ export function bauePayloads(session, eintraege, { soll = eintraege, ledgerSpans
   }
   const generationen = eintraege.map((e) => ({
     id: e.id,
-    span: generationSpan(e, { traceAttrs, parentSpanId: e.rolle?.agentId && agenten.has(e.rolle.agentId) ? spanIdVon(e.rolle.agentId) : null }),
+    span: generationSpan(e, { traceAttrs, repoName, parentSpanId: e.rolle?.agentId && agenten.has(e.rolle.agentId) ? spanIdVon(e.rolle.agentId) : null }),
     gen: true,
   }));
   const alle = [...spans, ...generationen];

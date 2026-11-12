@@ -9,7 +9,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { MAX_INTERPRETER } from "./hook-io.mjs";
-import { GIT_GLOBAL_MIT_WERT, KNOWN_SUBS, PROTECTED_SUBS, abs, ask, ausserhalbRepo, isDir, real, tildeOf, UNKNOWN } from "./worktree-guard-tabellen.mjs";
+import { GIT_GLOBAL_MIT_WERT, KNOWN_SUBS, PROTECTED_SUBS, abs, aufgeloest, ask, ausserhalbRepo, isDir, kindShell, real, tildeOf, UNKNOWN } from "./worktree-guard-tabellen.mjs";
 
 // Die vier Optionen mit eigener Auswertung (-C, -c, --git-dir, --work-tree) behandelt gitOption selbst; der Rest der Tabelle nimmt nur einen Wert.
 const VALUE_OPTS = [...GIT_GLOBAL_MIT_WERT].filter((o) => !["-C", "-c", "--git-dir", "--work-tree"].includes(o));
@@ -73,7 +73,8 @@ const envWorte = (pe, name, global) => [...pe.env.filter((e) => e.name === name)
 /** `-C`-Kette ab `b`; liefert den Endpunkt und ergänzt `out`/`unresolved` für nicht auflösbare oder fehlende Ziele. */
 function folgeC(c, g, b, out, st) {
   let cur = b;
-  for (const w of g.cWords) {
+  for (const w0 of g.cWords) {
+    const w = aufgeloest(c, w0);
     const t = w.dynamic || /[{}*?]/.test(w.text) ? null : tildeOf(c, w.text);
     if (t === null) {
       st.unresolved = true;
@@ -186,7 +187,7 @@ function aliasAufloesen(g, words, k, rest, pe, D, c, depth) {
     const vorher = c.cAliases;
     c.cAliases = new Map([...vorher, ...g.aliases]);
     try {
-      c.evalString(`${al.slice(1)} ${rest.map((w) => w.text).join(" ")}`, gitTargetDirs(g, pe, D, c));
+      kindShell(c, () => c.evalString(`${al.slice(1)} ${rest.map((w) => w.text).join(" ")}`, gitTargetDirs(g, pe, D, c)));
     } finally {
       c.cAliases = vorher;
     }
@@ -195,6 +196,16 @@ function aliasAufloesen(g, words, k, rest, pe, D, c, depth) {
   const aw = al.trim().split(/\s+/).map((text) => ({ text, dynamic: false, quoted: false }));
   gitCall([...words.slice(0, g.subIdx), ...aw, ...rest], k, pe, D, c, depth + 1);
   return true;
+}
+
+/** Grobe Wortregel für `git stash` (außer list/show), wenn Zerlegen oder Analyse scheitert. */
+export const STASH_GROB = /\bgit\b.*\bstash\b(?!\s+(?:list|show)\b)/s;
+
+/** `git stash`: nur `list`/`show` als erstes Wort lesen; alles andere (auch `-q list`, `-p show` = push, dynamisch) ändert den repoweit geteilten Stash. */
+function stashMerken(c, sub, rest) {
+  if (sub !== "stash") return;
+  const w = rest[0];
+  if (!w || w.dynamic || !["list", "show"].includes(w.text)) c.stash = true;
 }
 
 /** Wertet einen git-Aufruf ab Index `k` aus: geschützte Aufrufe tragen ihre Ziele in `c.targets` ein. */
@@ -209,6 +220,7 @@ export function gitCall(words, k, pe, D, c, depth) {
   const rest = words.slice(g.subIdx + 1);
   if (sub === "config") return configAliasMerken(c, rest);
   if (aliasAufloesen(g, words, k, rest, pe, D, c, depth)) return;
+  stashMerken(c, sub, rest);
   if (PROTECTED_SUBS.has(sub) || (sub === "subtree" && rest[0]?.text === "push")) {
     for (const d of gitTargetDirs(g, pe, D, c)) c.targets.add(d);
     return;
@@ -218,6 +230,6 @@ export function gitCall(words, k, pe, D, c, depth) {
   const dirs = gitTargetDirs(g, pe, D, c);
   for (const w of inner) {
     if (w.dynamic) ask(c, [...dirs], "Unterkommando von `git submodule foreach`/`git rebase -x` ist nicht statisch.", true);
-    else c.evalString(w.text, dirs);
+    else kindShell(c, () => c.evalString(w.text, dirs));
   }
 }

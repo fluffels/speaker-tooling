@@ -4,7 +4,7 @@
  *
  *   node scripts/harness-doctor-melden.mjs [--dry-run]
  *
- * Zeile: `- [ ] <YYYY-MM-DD> Harness-Doctor (Wochenlauf): LÜCKE <Punkt>: <Befund> Fix: <Schritt>`, bei einem nicht prüfbaren Punkt (factory#116) `NICHT PRÜFBAR` statt `LÜCKE`.
+ * Zeile: `- [ ] Defekt: <YYYY-MM-DD> Harness-Doctor (Wochenlauf): LÜCKE <Punkt>: Beleg: <Befund> Fix: <Schritt>` (Klasse und Beleg laut AGENTS.md § Harness-Befunde sind Zeilen; ohne Beleg nur im Bericht), bei einem nicht prüfbaren Punkt (factory#116) `NICHT PRÜFBAR` statt `LÜCKE`.
  * Bekannt ist ein Punkt, wenn irgendeine offene Zeile `- [ ]` eines vertrauten Autors (`istVertraut`) in einem offenen Harness-Sammelticket (auch einem geclaimten)
  * `Harness-Doctor (Wochenlauf): <Art> <Punkt>: ` mit derselben Art enthält; Schlüssel ist Art und Punkt, nicht der Befund (ein geänderter Befund erzeugt keine zweite Zeile;
  * wird aus „nicht prüfbar“ eine Lücke, ändert sich die Abhilfe und es kommt eine neue Zeile). Alle neuen Zeilen
@@ -21,9 +21,9 @@ import { inboxStart, ladeBoardLibs } from "./inbox-start-lib.mjs";
 import { fehlerText, ghJson, ghText } from "./gh-cli.mjs";
 import { istDirektaufruf } from "./direktaufruf.mjs";
 import { ladeProjektConfig } from "./projekt-config-lib.mjs";
-import { pruefeDateien } from "./harness-doctor-dateien.mjs";
-import { mitMeldestelle } from "./harness-doctor-meldestelle.mjs";
+import { dateienStandard } from "./harness-doctor-factory-update.mjs";
 import { pruefLauf } from "./harness-doctor-lib.mjs";
+import { pruefeBefundZeile } from "./sammelticket-titel.mjs";
 import { bereiteMeldung, eigenerLogin, keinSammelticketText, meldestelleZugang, zeileBekannt } from "./meldung-lib.mjs";
 
 const WURZEL = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,15 +36,18 @@ export const artFuer = (l) => (l.nichtPruefbar === true ? "NICHT PRÜFBAR" : "L�
 /** Schlüssel einer Meldung im Zeilentext (endet mit `: `, damit `Secret A` nicht `Secret AB` trifft). Pur. */
 export const schluesselFuer = (punkt, art = "LÜCKE") => `${KENNUNG}: ${art} ${punkt}: `;
 
-/** Die Sammelticket-Zeile zu einer Lücke oder einem nicht prüfbaren Punkt `{ punkt, befund, fix, nichtPruefbar? }`. Pur. */
-export const zeileFuer = (l, heute) => `- [ ] ${heute} ${schluesselFuer(l.punkt, artFuer(l))}${einzeilig(l.befund)} Fix: ${l.fix}`;
+/** Die Sammelticket-Zeile zu einer Lücke oder einem nicht prüfbaren Punkt `{ punkt, befund, fix, nichtPruefbar? }`: Klasse `Defekt`, der Befund (Ausgabe des Checks) ist der Beleg (AGENTS.md § Harness-Befunde sind Zeilen). Pur. */
+export const zeileFuer = (l, heute) => `- [ ] Defekt: ${heute} ${schluesselFuer(l.punkt, artFuer(l))}Beleg: ${einzeilig(l.befund)} Fix: ${l.fix}`;
 
 /** Ist der Punkt (mit dieser Art) schon als offene Zeile eines vertrauten Autors in `kommentare` (`[{ user, body }]`) gemeldet? `eigen`: Login des eigenen Kontos an einer fremden Meldestelle (zählt als vertraut, factory#153). Pur. */
 export const istBekannt = (punkt, kommentare, owner, art = "LÜCKE", eigen = null) => zeileBekannt({ kommentare, owner, eigen, schluessel: schluesselFuer(punkt, art) });
 
 /** Die neuen Zeilen: je Lücke, deren Punkt nicht bekannt ist (zwei Lücken desselben neuen Punkts kommen beide). Pur. */
 export const plane = ({ luecken, kommentare, owner, heute, eigen = null }) =>
-  luecken.filter((l) => !istBekannt(l.punkt, kommentare, owner, artFuer(l), eigen)).map((l) => zeileFuer(l, heute));
+  luecken.filter((l) => !istBekannt(l.punkt, kommentare, owner, artFuer(l), eigen)).map((l) => zeileFuer(l, heute)).filter((z) => pruefeBefundZeile(z).ok);
+
+/** Die Lücken, deren Zeile den Eingangsfilter nicht besteht (leerer Befund = kein Beleg): sie stehen nur im Bericht, nicht im Sammelticket. Pur. */
+export const ohneBeleg = (luecken) => luecken.filter((l) => !pruefeBefundZeile(zeileFuer(l, "2000-01-01")).ok);
 
 /**
  * Die Lücken dieses Laufs. In Actions ohne `PROJECT_TOKEN` kann der Doctor nichts prüfen (kein einziger Aufruf): dann ist genau das die Lücke.
@@ -71,6 +74,7 @@ export function lauf({ io, trocken = false }) {
     return 1;
   }
   log("HINWEIS Langfuse: im Wochenlauf nicht geprüft (lokal: node scripts/langfuse-vorbedingung.mjs)");
+  for (const l of ohneBeleg(luecken)) log(`::warning::${KENNUNG}: ${l.punkt} ohne Beleg, nur im Bericht`);
   if (luecken.length === 0) {
     log(`${KENNUNG}: nichts Neues`);
     return 0;
@@ -114,7 +118,7 @@ export function lauf({ io, trocken = false }) {
 
 // ---- IO (ungetestet) ----
 
-/** Einstieg. `deps` (Tests): `env` (Standard `process.env`), `api` (Standard `ghJson`: Wahl des Sammeltickets und `gh api user` für das eigene Konto), `ladeConfig()`, `ladeLibs()` (liefert `REPO`, `MELDESTELLE`, `ladeSammelKontext`, `postZeilen`, `waehleSammelticket`), `log`, `err`, `bereite(zeilen, { herkunft })` (Standard `bereiteMeldung`), `pruefLauf` (Doctor-Lauf; der Wochenlauf ruft ihn mit `rootDir`, `gh`, `langfuse: null` und `dateien` (factory#94, dazu der Punkt `Meldestelle` an einer fremden Stelle, factory#208), ohne `umgebung`). */
+/** Einstieg. `deps` (Tests): `env` (Standard `process.env`), `api` (Standard `ghJson`: Wahl des Sammeltickets und `gh api user` für das eigene Konto), `ladeConfig()`, `ladeLibs()` (liefert `REPO`, `MELDESTELLE`, `ladeSammelKontext`, `postZeilen`, `waehleSammelticket`), `log`, `err`, `bereite(zeilen, { herkunft })` (Standard `bereiteMeldung`), `pruefLauf` (Doctor-Lauf; der Wochenlauf ruft ihn mit `rootDir`, `gh`, `langfuse: null` und `dateien` (factory#94, dazu der Punkt `Meldestelle` an einer fremden Stelle, factory#208, und im Bezieher `Factory-Update`, factory#220: beides über `dateienStandard`), ohne `umgebung`). */
 export async function main(argv = process.argv.slice(2), { ladeConfig = () => ladeProjektConfig({ rootDir: WURZEL }), ladeLibs = ladeBoardLibs, log = console.log, err = console.error, pruefLauf: doctorLauf = pruefLauf, env = process.env, api = ghJson, bereite = (zeilen, opt) => bereiteMeldung(zeilen, { wurzel: WURZEL, ...opt }) } = {}) {
   const start = await inboxStart(argv, { skript: "harness-doctor-melden", praefix: `${KENNUNG}: Projekt-Config nicht lesbar: `, ladeConfig, ladeLibs, log, err });
   if (start.code !== undefined) return start.code;
@@ -128,14 +132,14 @@ export async function main(argv = process.argv.slice(2), { ladeConfig = () => la
       ermittleLuecken({
         env,
         repo: REPO,
-        pruefe: () => doctorLauf({ rootDir: WURZEL, gh: (a) => ghText(a, { token: projektToken, timeout: 30000 }), langfuse: null, dateien: mitMeldestelle(pruefeDateien, { env, lesen: (a, token) => api(a, { token, timeout: 30000 }) }) }).ergebnis,
+        pruefe: () => doctorLauf({ rootDir: WURZEL, gh: (a) => ghText(a, { token: projektToken, timeout: 30000 }), langfuse: null, dateien: dateienStandard({ env, lesen: (a, token) => api(a, { token, timeout: 30000 }) }) }).ergebnis,
       }),
     kontext: () => {
       const { offene, kommentare, owner } = ladeSammelKontext({ repo: ziel, token: zugang.token });
       const eigen = eigenerLogin({ zugang, api, warn: log });
       return { kommentare, owner, eigen, ziel: waehleSammelticket(offene, ziel, (a) => api(a, { token: zugang.token }))?.number };
     },
-    bereite: (zeilen) => bereite(zeilen, { herkunft: zugang.herkunft }),
+    bereite: (zeilen) => bereite(zeilen, { herkunft: zugang.herkunft, eigenes: REPO }),
     postZeilen: (nr, text) => postZeilen(nr, text, ziel, zugang.token),
     heute: new Date().toISOString().slice(0, 10),
     log,

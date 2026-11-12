@@ -1,4 +1,5 @@
 // Blatt-Modul (factory#181): Quellwurzeln und Endungsliste der Projekt-Config (`struktur.quelle`, `struktur.endungen`, `struktur.ohne`, `struktur.docmapEinheit`).
+// `quellDateien` überspringt von Git ignorierte Ordner (`git ls-files -o -i --exclude-standard --directory`, ohne Git-Repo kein Sprung).
 // Importiert nur Node-Builtins, `pfad-glob.mjs` und `relativ-pfad.mjs`; nie `projekt-config-lib` oder `check-basis` (Zyklus), darum sagen die
 // Meldungen „in der Projekt-Config“ ohne Dateipfad. Kein Projektliteral.
 //
@@ -6,6 +7,7 @@
 // etwa `*/src/main/java`). Globs lösen nur Ordner auf. Grenze beim Auflösen eines Globs (geschlossene Liste): `node_modules` und Ordner mit
 // führendem `.` werden nie betreten; ohne `**` reicht der Abstieg nur so tief wie das Muster Segmente hat; ein wörtlicher Präfix vor dem ersten Glob-Segment wird direkt genommen (auch `.claude/...`). Innerhalb einer
 // aufgelösten Wurzel zählt jede Datei mit passender Endung, wie bisher.
+import { execFileSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { globMaengel, globRegex } from "./pfad-glob.mjs";
@@ -13,6 +15,12 @@ import { istRelativPosix } from "./relativ-pfad.mjs";
 
 /** Endungen der JS/TS-Familie (`.d.ts` zählt über `.ts` mit); gilt, wenn `struktur.endungen` fehlt. */
 export const STANDARD_ENDUNGEN = Object.freeze([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"]);
+
+/** Standard-Endungen des Datenbudgets (`datengroesse.endungen`): ein Format, kein Projektwort. */
+export const DATEN_STANDARD_ENDUNGEN = Object.freeze([".json"]);
+
+/** Endungen von `check:docmap`, wenn `struktur.endungen` fehlt (wie bisher nur `.ts`, nicht die JS/TS-Familie von check:size). */
+export const DOCMAP_STANDARD_ENDUNGEN = Object.freeze([".ts"]);
 
 /** Doku-Einheiten von `check:docmap` (`struktur.docmapEinheit`): eine Datei oder ein Ordner je Modul; Standard `datei`. */
 export const DOCMAP_EINHEITEN = Object.freeze(["datei", "ordner"]);
@@ -103,6 +111,9 @@ function ordnerWalk(rootDir, rel, regex, treffer, maxTiefe, readdir) {
   }
 }
 
+// Die Regexe, die einen Ordner als Treffer des Musters zählen: das Muster selbst, bei abschließendem `/**` (null oder mehr Ebenen) auch das Muster ohne dieses Segment (der Präfix-Ordner selbst).
+const musterRegexe = (muster) => (muster.endsWith("/**") ? [globRegex(muster), globRegex(muster.slice(0, -3))] : [globRegex(muster)]);
+
 /** Die Ordner (repo-relativ, POSIX, sortiert), die ein Eintrag von `struktur.quelle` trifft; ein wörtlicher Pfad ergibt sich selbst, wenn er ein Ordner ist, sonst `[]`.
  *  Ohne `**` ist die Auflösung auf die Segmentzahl des Musters begrenzt (kein Abstieg in `target` oder Modul-Unterbäume, factory#208); `readdir` ist die Dateisystem-Naht. */
 export function ordnerZuMuster(rootDir, muster, readdir = readdirSync) {
@@ -112,7 +123,8 @@ export function ordnerZuMuster(rootDir, muster, readdir = readdirSync) {
   const praefix = segmente.slice(0, erstes).join("/");
   if (praefix !== "" && !istOrdner(join(rootDir, ...praefix.split("/")))) return [];
   const treffer = [];
-  ordnerWalk(rootDir, praefix, globRegex(muster), treffer, segmente.includes("**") ? Infinity : segmente.length, readdir);
+  if (praefix !== "" && musterRegexe(muster).some((re) => re.test(praefix))) treffer.push(praefix);
+  ordnerWalk(rootDir, praefix, { test: (k) => musterRegexe(muster).some((re) => re.test(k)) }, treffer, segmente.includes("**") ? Infinity : segmente.length, readdir);
   return treffer.sort();
 }
 
@@ -126,33 +138,53 @@ export function wurzelPraefixe(pfad, wurzeln) {
       if (pfad.startsWith(`${w}/`)) treffer.add(w);
       continue;
     }
-    const regex = globRegex(w);
+    const regexe = musterRegexe(w);
     const erstes = w.split("/").findIndex((s) => istGlob(s));
     for (let i = 1; i < segmente.length; i++) {
       const praefix = segmente.slice(0, i);
       if (praefix.slice(erstes).some(uebersprungen)) break;
-      if (regex.test(praefix.join("/"))) treffer.add(praefix.join("/"));
+      if (regexe.some((re) => re.test(praefix.join("/")))) treffer.add(praefix.join("/"));
     }
   }
   return [...treffer];
 }
 
-function dateiWalk(rootDir, rel, dateien) {
+/**
+ * Die von Git ignorierten Ordner unter `rootDir` (repo-relativ zu `rootDir`, POSIX, ohne End-Schrägstrich): `git ls-files -o -i --exclude-standard --directory`, einmal je Aufruf.
+ * Ohne Git-Repo oder ohne `git` ist die Menge leer (fail-open: dann zählt jede Datei, die strengere Richtung).
+ */
+function ignorierteOrdner(rootDir) {
+  try {
+    const aus = execFileSync("git", ["ls-files", "-o", "-i", "--exclude-standard", "--directory"], { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+    return new Set(aus.split("\n").filter((z) => z.endsWith("/")).map((z) => z.slice(0, -1)));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Liegt `rel` in oder unter einem ignorierten Ordner? */
+const unterIgnoriertem = (rel, ignoriert) => rel.split("/").some((_, i, s) => ignoriert.has(s.slice(0, i + 1).join("/")));
+
+function dateiWalk(rootDir, rel, dateien, ignoriert) {
   for (const ent of readdirSync(join(rootDir, ...rel.split("/")), { withFileTypes: true })) {
     const kind = `${rel}/${ent.name}`;
-    if (ent.isDirectory()) dateiWalk(rootDir, kind, dateien);
+    if (ent.isDirectory()) {
+      if (!ignoriert.has(kind)) dateiWalk(rootDir, kind, dateien, ignoriert);
+    }
     else if (ent.isFile()) dateien.push(kind);
   }
 }
 
-/** Alle Quelldateien (repo-relativ, POSIX, sortiert, ohne Dubletten) unter den Wurzeln mit einer der Endungen, abzüglich der `ohne`-Globs. */
+/** Alle Quelldateien (repo-relativ, POSIX, sortiert, ohne Dubletten) unter den Wurzeln mit einer der Endungen, abzüglich der `ohne`-Globs und der von Git ignorierten Ordner (Build-Ausgaben wie `target/`). */
 export function quellDateien(rootDir, { wurzeln, endungen, ohne = [] }) {
   const ausgeschlossen = ohne.map(globRegex);
   const alle = new Set();
+  const ignoriert = ignorierteOrdner(rootDir);
   for (const wurzel of wurzeln) {
     for (const ordner of ordnerZuMuster(rootDir, wurzel)) {
+      if (unterIgnoriertem(ordner, ignoriert)) continue;
       const dateien = [];
-      dateiWalk(rootDir, ordner, dateien);
+      dateiWalk(rootDir, ordner, dateien, ignoriert);
       for (const d of dateien) {
         if (endungen.some((e) => d.endsWith(e)) && !ausgeschlossen.some((re) => re.test(d))) alle.add(d);
       }

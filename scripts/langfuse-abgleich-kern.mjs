@@ -5,13 +5,13 @@
  * und -Auswertung, Multimengen-Diff. Pur bis auf `findeSessions` (Dateisystem) und `holeMetrics` (Netz über `fetchImpl`).
  * Bewertung, Bericht und CLI stehen in langfuse-abgleich.mjs, der Schreibweg in langfuse-nachliefern.mjs.
  */
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { istProjektOrdner } from "./transkript.mjs";
 import { escapeRegex } from "./regex-lib.mjs";
-import { callsFromTranscript, eindeutigeCalls } from "./transkript-calls.mjs";
+import { callsDerSitzung } from "./transkript-calls.mjs";
 import { queryMetrics, usageAusObservation } from "./langfuse-api.mjs";
+import { beobachtungsId, traceIdVon, subagentSpanId, scoreId } from "./langfuse-otlp.mjs";
 
 /** Eine Session, deren Dateien jünger sind, läuft noch: ihre Calls sind noch nicht (vollständig) in Langfuse. */
 export const RUHEFRIST_MIN = 30;
@@ -79,15 +79,8 @@ export function ledgerLesen(datei) {
   return { ledger: leeresLedger(), kaputt: true };
 }
 
-const sha = (text) => createHash("sha256").update(text).digest("hex");
-/** Observation-ID: 16 Hex, deterministisch aus Session und Message (idempotentes Nachtragen in 2/3). */
-export const beobachtungsId = (session, messageId) => sha(session + messageId).slice(0, 16);
-/** Trace-ID: 32 Hex, je Session ein Abgleich-Trace. */
-export const traceIdVon = (session) => sha(session).slice(0, 32);
-/** Span-ID eines Subagenten: 16 Hex, deterministisch aus Session und Agent-ID (Nachliefern sendet den Span je Session einmal). */
-export const subagentSpanId = (session, agentId) => sha(session + "agent:" + agentId).slice(0, 16);
-/** Score-ID: 32 Hex, deterministisch aus Name und Session (Upsert statt Dublette). */
-export const scoreId = (session, name) => sha("score:" + name + ":" + session).slice(0, 32);
+// Die ID-Funktionen stehen in langfuse-otlp.mjs (pur, ohne langfuse-api); hier nur weitergereicht.
+export { beobachtungsId, traceIdVon, subagentSpanId, scoreId };
 
 // ── Soll (pur) ───────────────────────────────────────────────────────────────
 
@@ -105,20 +98,8 @@ export function ticketAusBranch(gitBranch, worktree) {
  */
 export function sollEintraege(sitzung, { session = sitzung.id, worktree } = {}) {
   if (typeof worktree !== "string" || worktree === "") throw new Error("sollEintraege braucht das Worktree-Präfix (praefixe.worktree der Projekt-Config)");
-  const quellen = [
-    { zeilen: sitzung.main, rolle: null },
-    ...sitzung.subagents.map((s) => ({
-      zeilen: s.zeilen,
-      rolle: {
-        agentId: s.datei.replace(/\.jsonl$/, "").replace(/^agent-/, ""),
-        agentType: s.meta?.agentType,
-        description: s.meta?.description,
-        parentAgentId: s.meta?.parentAgentId,
-      },
-    })),
-  ];
-  // Dieselbe Zusammenführung wie `readTranscriptSession` (token-baseline): die Rolle steht als `subagent` am Call.
-  const calls = eindeutigeCalls(quellen.flatMap(({ zeilen, rolle }) => callsFromTranscript(zeilen, rolle).calls));
+  // Dieselbe Zusammenführung wie die Kosten-Messung (token-baseline): `callsDerSitzung` setzt die Rolle als `subagent` an den Call.
+  const { calls } = callsDerSitzung(sitzung);
   return calls.map((c) => {
     const write1h = Math.min(c.cacheWrite1h, c.cacheWrite);
     return {
@@ -129,11 +110,16 @@ export function sollEintraege(sitzung, { session = sitzung.id, worktree } = {}) 
       model: c.model ?? null,
       ts: c.ts,
       usage: { input: c.input, output: c.output, cacheRead: c.cacheRead, cacheWrite5m: c.cacheWrite - write1h, cacheWrite1h: write1h },
-      rolle: c.subagent,
+      rolle: c.subagent
+        ? { agentId: c.subagent.id.replace(/\.jsonl$/, "").replace(/^agent-/, ""), agentType: c.subagent.agentType, description: c.subagent.description, parentAgentId: c.subagent.parentAgentId }
+        : null,
       ticket: ticketAusBranch(c.gitBranch, worktree),
     };
   });
 }
+
+/** Hängt jedem Soll-Eintrag die Zuordnungs-Metadaten an (`zuordnungen` aus `transkript-calls.mjs`, Map Message-ID → Werte); ohne Treffer `{}`. */
+export const sollMitZuordnung = (soll, map) => soll.map((e) => ({ ...e, zuordnung: map.get(e.messageId) ?? {} }));
 
 const jsonlDateien = (dir) => (existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".jsonl")) : []);
 

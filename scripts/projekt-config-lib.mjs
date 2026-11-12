@@ -19,7 +19,8 @@ import { internalrefsMaengel } from "./internalrefs-lib.mjs";
 import { QUELL_VERZEICHNIS, ZEIGER_WURZEL } from "./skill-pfade.mjs";
 import { gleichesRepo, istRepoForm, zerlegeRepo } from "./repo-form.mjs";
 import { modulFormFehler } from "./modul-wahl-lib.mjs";
-import { DATEN_STANDARD_ENDUNGEN, istObjekt, istText, pruefeAusnahmen, pruefeBerechtigungen, pruefeDatengroesse, pruefeEscapeKopien, pruefeFactoryLinks, pruefeGates, pruefeLabels, pruefeLiterale, pruefeSandbox, pruefeSkills, pruefeSprache, pruefeStruktur } from "./projekt-config-bloecke.mjs";
+import { DATEN_STANDARD_ENDUNGEN } from "./quellwurzeln-lib.mjs";
+import { istObjekt, istText, pruefeAusnahmen, pruefeBerechtigungen, pruefeDatengroesse, pruefeEscapeKopien, pruefeFactoryLinks, pruefeGates, pruefeLabels, pruefeLangfuseWochenbericht, pruefeLiterale, pruefeRisiko, pruefeSandbox, pruefeSkills, pruefeSprache, pruefeStruktur, pruefeVorpruefung } from "./projekt-config-bloecke.mjs";
 import { pruefeDesign } from "./design-lib.mjs";
 import { pruefeBefehle } from "./gate-befehl-lib.mjs";
 import { istBezieher } from "./sync-stand-lib.mjs";
@@ -169,6 +170,12 @@ export function labelAus(config, schluessel) {
   return wert;
 }
 
+/** Pur: das optionale Label zum Schlüssel `labels.<schluessel>` oder `null` (fehlt, kein String oder leer); wirft nie. Gegenstück zu `labelAus` für Schlüssel, die ein Projekt weglassen darf (`entscheidung`, `codequalitaet`). */
+export function optionalesLabel(config, schluessel) {
+  const wert = config?.labels?.[schluessel];
+  return typeof wert === "string" && wert.trim() !== "" ? wert : null;
+}
+
 /**
  * Pur: der Block `sprache` der Config (`umschrift` plus `spezifikation` mit den Abschnittsnamen und Schlüsselwörtern des Spezifikations-Gates);
  * wirft ohne `sprache` (kein stiller Deutsch-Standardwert, #1711). Die Form prüft `pruefeProjektConfig`, das Gate wirft bei einem fehlenden Schlüssel selbst.
@@ -239,7 +246,7 @@ export function datengroesseAus(config) {
   const fehler = pruefeDatengroesse(wert);
   if (fehler.length > 0) throw new Error(`${fehler.join("; ")} in ${PROJEKT_CONFIG}
 Fix: den Block datengroesse (pfade, budget; optional endungen, hinweis, deckel: Liste von { datei, max, grund mit #<nr> }) in ${PROJEKT_CONFIG} korrigieren`);
-  return { pfade: wert.pfade, budget: wert.budget, endungen: wert.endungen ?? DATEN_STANDARD_ENDUNGEN, hinweis: wert.hinweis ?? null, deckel: wert.deckel ?? [] };
+  return { pfade: wert.pfade, budget: wert.budget, endungen: wert.endungen ?? [...DATEN_STANDARD_ENDUNGEN], hinweis: wert.hinweis ?? null, deckel: wert.deckel ?? [] };
 }
 
 /**
@@ -320,6 +327,15 @@ export function sandboxAus(config) {
   return { allowedDomains: wert.allowedDomains ?? [], envVars: wert.envVars ?? [] };
 }
 
+/** Pur: die Projekt-Werkzeuge der Vorprüfung (`vorpruefung.befehle`, factory#260) als `{ befehle, userScopeServer }` (`userScopeServer`: zusätzliche User-Scope-MCP-Server); ohne Block leer. Wirft mit Fix-Zeile bei kaputter Form. */
+export function vorpruefungAus(config) {
+  const wert = config?.vorpruefung;
+  if (wert === undefined) return { befehle: [], userScopeServer: [] };
+  const fehler = pruefeVorpruefung(wert);
+  if (fehler.length > 0) throw new Error(`${fehler.join("; ")} in ${PROJEKT_CONFIG}\nFix: den Block vorpruefung (befehle: Liste von { name, befehl: [Programm, Argument…] }; userScopeServer: Liste von Servernamen) in ${PROJEKT_CONFIG} korrigieren`);
+  return { befehle: wert.befehle ?? [], userScopeServer: wert.userScopeServer ?? [] };
+}
+
 /** Pur: die gesamte Ergänzung des Projekts aus der geparsten Config: die Listen von `berechtigungen` plus der Zweig `sandbox`; wirft bei kaputter Form. */
 export function ergaenzungAus(config) {
   return { ...berechtigungenAus(config), sandbox: sandboxAus(config) };
@@ -376,6 +392,7 @@ export function pruefeProjektConfig(wert) {
   if (wert.factoryLinks !== undefined) fehler.push(...pruefeFactoryLinks(wert.factoryLinks));
   if (wert.berechtigungen !== undefined) fehler.push(...pruefeBerechtigungen(wert.berechtigungen));
   if (wert.sandbox !== undefined) fehler.push(...pruefeSandbox(wert.sandbox));
+  fehler.push(...pruefeVorpruefung(wert.vorpruefung), ...pruefeLangfuseWochenbericht(wert.langfuseWochenbericht), ...pruefeRisiko(wert.risiko));
   fehler.push(...pruefeDesign(wert.design));
   fehler.push(...pruefeBefehle(wert.befehle));
   fehler.push(...internalrefsMaengel(wert.internalrefs));
@@ -395,11 +412,15 @@ export const boardRepo = (board, config) => (typeof board?.repo === "string" ? b
 /** Pur: das Repo (`owner/name`) aus der `repository_url` eines Issues (`…/repos/<owner>/<name>`); leer, wenn die URL es nicht trägt. */
 export const repoAusUrl = (url) => /\/repos\/([^/]+\/[^/]+)$/.exec(String(url ?? ""))?.[1] ?? "";
 
-/** Pur: Board-Rolle zu den Labels eines Issues (Strings oder `{ name }`-Objekte); genau `labels.harness` der Config ergibt `factory`, sonst `produkt`. Ohne Liste, ohne `config` oder ohne Schlüssel wirft sie. */
-export function boardRolleFuer(labels, config) {
+/** Pur: Board-Rolle zu den Labels eines Issues (Strings oder `{ name }`-Objekte); genau `labels.harness` der Config ergibt `factory`, sonst `produkt`. Mit `{ repo }` (Repo des Issues) zählt das Harness-Label nur, wenn das Factory-Board dieses Repo führt, sonst `produkt`. Ohne Liste, ohne `config` oder ohne Schlüssel wirft sie. */
+export function boardRolleFuer(labels, config, { repo } = {}) {
   if (!Array.isArray(labels)) throw new Error("boardRolleFuer braucht die Label-Liste des Issues\nFix: labels als Array übergeben (auch leer)");
   const harness = labelAus(config, "harness");
-  return labels.some((l) => (typeof l === "string" ? l : l?.name) === harness) ? "factory" : "produkt";
+  if (!labels.some((l) => (typeof l === "string" ? l : l?.name) === harness)) return "produkt";
+  // Trennregel mit Issue-Repo (#238): das Harness-Label zählt nur, wenn das Factory-Board das Repo des Issues führt; ohne bekanntes Repo wie bisher.
+  const fuehrt = repoDerRolle("factory", config);
+  const bekannt = typeof repo === "string" && repo !== "" && typeof fuehrt === "string";
+  return !bekannt || gleichesRepo(repo, fuehrt) ? "factory" : "produkt";
 }
 
 /** Pur: das Board der Rolle `rolle` (`config.boards[]`) oder `undefined`. */
