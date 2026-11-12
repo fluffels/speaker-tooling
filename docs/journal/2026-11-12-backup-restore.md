@@ -15,7 +15,7 @@
 
 - Lokal (macOS, `/bin/bash` 3.2.57, Compose-Datenbank `postgres:18`): `bash betrieb/test-rundlauf.sh` und `/bin/bash betrieb/test-rundlauf.sh` enden mit „Rundlauf-Test bestanden“.
 - Red-Green (je einzeln verfälscht, Test rot, zurückgesetzt, grün): Leer-Prüfung auf „immer leer“, Dateiprüfung, `--single-transaction`, Relationsarten, Argumentzahl `-ne 1`, `! -f`, Leer-Prüfung und Überschreibschutz in `backup.sh`. Die Test-Lens fand zuerst sieben überlebende Verfälschungen; die Fälle dazu (kaputte Sicherung, Relationsarten, zwei Argumente, Verzeichnis, leerer Dump, vorhandene Datei über einen `date`-Stub) stehen jetzt im Test.
-- CI-Läufe der Jobs `betrieb-linux` und `betrieb-macos`: siehe PR (Link folgt mit dem Lauf).
+- CI-Läufe der Jobs `betrieb-linux` und `betrieb-macos`: siehe die Checks von PR #34 (`Betrieb (Backup/Restore, Linux)` mit shellcheck, `Betrieb (Backup/Restore, macOS, bash 3.2)` mit der Zeile der bash-Version).
 
 ## Compose-Restore auf macOS
 

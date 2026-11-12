@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Gemeinsame Einstellungen für backup.sh, restore.sh und test-rundlauf.sh (wird mit `.` eingebunden, nicht ausgeführt).
 # bash-3.2-kompatibel (macOS /bin/bash, Git Bash).
 #

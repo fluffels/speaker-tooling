@@ -36,6 +36,7 @@ anlegen() { $DB_EXEC createdb -U "$DB_USER" "$1"; }
 # shellcheck disable=SC2086
 loeschen() { $DB_EXEC dropdb -U "$DB_USER" --if-exists --force "$1" >/dev/null 2>&1; }
 
+# shellcheck disable=SC2329  # läuft über trap EXIT
 aufraeumen() {
   loeschen "$QUELLE"
   loeschen "$ZIEL"
