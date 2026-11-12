@@ -236,7 +236,7 @@ jobs:
         run: shellcheck betrieb/*.sh
 
       - name: age installieren (Verschlüsselungstest)
-        run: sudo apt-get install -y --no-install-recommends age
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
 
       - name: Rundlauf gegen die Compose-Datenbank
         run: |

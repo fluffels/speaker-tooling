@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Spielt eine Sicherung von backup.sh in eine LEERE Datenbank ein.
 # Aufruf: bash betrieb/restore.sh <datei>   Einstellungen: gemeinsam.sh (Ziel ist DB_NAME).
+# Bekannte Grenze: erkannt wird nur der binäre age-Kopf; eine mit age -a armierte Datei oder eine Klartextdatei namens *.sql.age läuft als Klartext.
 # Exit-Codes: 1 Aufruf, Datei oder Schlüssel (auch: nicht entschlüsselbar), 2 Ziel-Datenbank nicht leer, sonst der Exit von psql.
 # BACKUP_SCHLUESSEL  Datei mit der privaten age-Identität; nötig für *.sql.age. Eine Klartext-Sicherung wird bei gesetztem
 #                    Schlüssel mit Warnung eingespielt (Altbestand).

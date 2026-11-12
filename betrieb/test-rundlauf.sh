@@ -4,6 +4,7 @@
 # lokal ohne Container: DB_EXEC= und passende PG*-Variablen; age und age-keygen müssen installiert sein, Abschnitt 5 verlangt sie).
 # bash-3.2-kompatibel (macOS /bin/bash).
 set -uo pipefail
+unset BACKUP_EMPFAENGER BACKUP_SCHLUESSEL BACKUP_DIR  # eine Shell-Konfiguration darf den Test nicht in den Schutz-Modus ziehen
 
 WURZEL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=betrieb/gemeinsam.sh
@@ -73,6 +74,7 @@ if [ -n "$(find "$DATEI" -perm 600 2>/dev/null)" ]; then ok "Sicherung hat Modus
 anlegen "$ZIEL"
 if restore "$ZIEL" "$DATEI" >"$TMP/restore.out" 2>&1; then RC=0; else RC=$?; fi
 pruefe_gleich "Restore in leere DB Exit 0" 0 "$RC"
+case "$(cat "$TMP/restore.out")" in *WARNUNG*) nok "Klartext-Restore ohne Schlüssel warnt nicht" ;; *) ok "Klartext-Restore ohne Schlüssel warnt nicht" ;; esac
 ABFRAGE="select id, coalesce(text, '<NULL>') from app.notiz order by id"
 pruefe_gleich "Zeilen gleich Quelle" "$(sql "$QUELLE" "$ABFRAGE")" "$(sql "$ZIEL" "$ABFRAGE")"
 pruefe_gleich "Zeilenzahl 4" 4 "$(sql "$ZIEL" "select count(*) from app.notiz")"
@@ -194,7 +196,8 @@ case "$KDATEI" in *.sql.age) ok "Verschlüsselt: Datei endet auf .sql.age" ;; *)
 if [ -n "$(find "$KDATEI" -perm 600 2>/dev/null)" ]; then ok "Verschlüsselt: Modus 600"; else nok "Verschlüsselt: nicht Modus 600"; fi
 pruefe_gleich "Verschlüsselt: erste Zeile ist der age-Kopf" "age-encryption.org/v1" "$(head -n 1 "$KDATEI")"
 if grep -a -q -e "PostgreSQL database dump" -e "Größe" "$KDATEI"; then nok "Verschlüsselt: Klartext in der Sicherung gefunden"; else ok "Verschlüsselt: kein Klartext in der Sicherung"; fi
-pruefe_enthaelt "Verschlüsselt: Meldung sagt verschlüsselt" "verschlüsselt" "$(cat "$TMP/e")"
+pruefe_enthaelt "Verschlüsselt: Meldung sagt mit age verschlüsselt" "mit age verschlüsselt" "$(cat "$TMP/e")"
+case "$(cat "$TMP/e")" in *WARNUNG*) nok "Verschlüsselt: Meldung enthält eine Warnung" ;; *) ok "Verschlüsselt: keine Warnung" ;; esac
 pruefe_gleich "Verschlüsselt: nur die Sicherung liegt im Ordner" 1 "$(dateien "$K1")"
 
 # 5b. Schutz aktiv über die Standard-Empfängerdatei, ohne Variable
@@ -211,29 +214,45 @@ pruefe_gleich "Verschlüsselter Rundlauf: Zeilen gleich Quelle" "$(sql "$QUELLE"
 pruefe_gleich "Verschlüsselter Rundlauf: Sequenzwert gleich Quelle" "$(sql "$QUELLE" "$SEQ")" "$(sql "$KRYPT" "$SEQ")"
 
 # 5d. Negativfall backup.sh bei aktivem Schutz: abgelehnt, nichts bleibt liegen
-ablehnung() { # ablehnung <name> <ordner> [Umgebung ...]
-  name="$1"; ordner="$2"; shift 2
+ablehnung() { # ablehnung <name> <ordner> <grund> [Umgebung ...]
+  name="$1"; ordner="$2"; grund="$3"; shift 3
   if env "$@" BACKUP_DIR="$ordner" DB_NAME="$QUELLE" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
   pruefe_gleich "$name: Exit 1" 1 "$RC"
   pruefe_enthaelt "$name: Meldung" "unverschlüsselte Sicherung abgelehnt" "$(cat "$TMP/e")"
+  pruefe_enthaelt "$name: Grund" "$grund" "$(cat "$TMP/e")"
 }
-ablehnung "Empfängerdatei fehlt" "$TMP/n1" "BACKUP_EMPFAENGER=$TMP/gibt-es-nicht.txt"
+ablehnung "Empfängerdatei fehlt" "$TMP/n1" "Empfängerdatei fehlt oder ist nicht lesbar" "BACKUP_EMPFAENGER=$TMP/gibt-es-nicht.txt"
 pruefe_gleich "Empfängerdatei fehlt: nichts bleibt liegen" 0 "$(dateien "$TMP/n1")"
 echo "kein-schluessel" > "$TMP/kaputt.txt"
-ablehnung "Empfängerdatei ungültig" "$TMP/n2" "BACKUP_EMPFAENGER=$TMP/kaputt.txt"
+ablehnung "Empfängerdatei ungültig" "$TMP/n2" "Empfängerdatei ist ungültig" "BACKUP_EMPFAENGER=$TMP/kaputt.txt"
 pruefe_gleich "Empfängerdatei ungültig: nichts bleibt liegen" 0 "$(dateien "$TMP/n2")"
 mkdir -p "$TMP/stub"; printf '#!/bin/sh\nexit 1\n' > "$TMP/stub/age"; chmod +x "$TMP/stub/age"
-ablehnung "age schlägt fehl" "$TMP/n3" "BACKUP_EMPFAENGER=$TMP/empfaenger.txt" "PATH=$TMP/stub:$PATH"
+ablehnung "age schlägt fehl" "$TMP/n3" "Empfängerdatei ist ungültig" "BACKUP_EMPFAENGER=$TMP/empfaenger.txt" "PATH=$TMP/stub:$PATH"
 pruefe_gleich "age schlägt fehl: nichts bleibt liegen" 0 "$(dateien "$TMP/n3")"
 mkdir -p "$TMP/n4"; : > "$TMP/n4/alt.sql.age"
-ablehnung "Empfängerdatei gelöscht, .sql.age liegt da" "$TMP/n4"
+ablehnung "Empfängerdatei gelöscht, .sql.age liegt da" "$TMP/n4" "Empfängerdatei fehlt oder ist nicht lesbar"
+ablehnung "BACKUP_EMPFAENGER leer gesetzt" "$TMP/n4b" "Empfängerdatei fehlt oder ist nicht lesbar" "BACKUP_EMPFAENGER="
+pruefe_gleich "BACKUP_EMPFAENGER leer gesetzt: nichts bleibt liegen" 0 "$(dateien "$TMP/n4b")"
 pruefe_gleich "Empfängerdatei gelöscht: nur die alte Datei bleibt" 1 "$(dateien "$TMP/n4")"
 mkdir -p "$TMP/minbin"
 for werkzeug in dirname date mkdir mv rm cat; do ln -sf "$(command -v $werkzeug)" "$TMP/minbin/$werkzeug"; done
 if PATH="$TMP/minbin" DB_EXEC=echo BACKUP_EMPFAENGER="$TMP/empfaenger.txt" BACKUP_DIR="$TMP/n5" DB_NAME="$QUELLE" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "age nicht installiert: Exit 1" 1 "$RC"
 pruefe_enthaelt "age nicht installiert: Meldung" "unverschlüsselte Sicherung abgelehnt" "$(cat "$TMP/e")"
+pruefe_enthaelt "age nicht installiert: Grund" "age ist nicht installiert" "$(cat "$TMP/e")"
 pruefe_gleich "age nicht installiert: nichts bleibt liegen" 0 "$(dateien "$TMP/n5")"
+
+# Fehler mitten im Strom: pg_dump bricht nach Teilausgabe ab, bzw. age scheitert erst bei Daten (die Vorprüfung besteht).
+printf '#!/bin/sh\necho "-- teil"\nexit 1\n' > "$TMP/stub/teildump.sh"; chmod +x "$TMP/stub/teildump.sh"
+if DB_EXEC="$TMP/stub/teildump.sh" BACKUP_EMPFAENGER="$TMP/empfaenger.txt" BACKUP_DIR="$TMP/n7" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "pg_dump bricht nach Teilausgabe ab: Exit 1" 1 "$RC"
+pruefe_enthaelt "pg_dump bricht nach Teilausgabe ab: Meldung" "pg_dump 1" "$(cat "$TMP/e")"
+pruefe_gleich "pg_dump bricht nach Teilausgabe ab: nichts bleibt liegen" 0 "$(dateien "$TMP/n7")"
+mkdir -p "$TMP/stub2"; printf '#!/bin/sh\nif IFS= read -r x; then cat >/dev/null; exit 1; fi\nexit 0\n' > "$TMP/stub2/age"; chmod +x "$TMP/stub2/age"
+if PATH="$TMP/stub2:$PATH" BACKUP_EMPFAENGER="$TMP/empfaenger.txt" BACKUP_DIR="$TMP/n8" DB_NAME="$QUELLE" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "age scheitert im Strom: Exit 1" 1 "$RC"
+pruefe_enthaelt "age scheitert im Strom: Meldung" "age 1" "$(cat "$TMP/e")"
+pruefe_gleich "age scheitert im Strom: nichts bleibt liegen" 0 "$(dateien "$TMP/n8")"
 
 # 5e. Leerer Dump bei aktivem Schutz
 if DB_EXEC=true BACKUP_EMPFAENGER="$TMP/empfaenger.txt" BACKUP_DIR="$TMP/n6" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
@@ -255,6 +274,16 @@ if BACKUP_SCHLUESSEL="$TMP/fremd.txt" restore "$KRYPT" "$KDATEI" >"$TMP/o" 2>"$T
 pruefe_gleich "Restore mit falschem Schlüssel: Exit 1" 1 "$RC"
 pruefe_enthaelt "Restore mit falschem Schlüssel: Meldung" "nicht entschlüsselbar" "$(cat "$TMP/e")"
 pruefe_gleich "Restore mit falschem Schlüssel: Ziel bleibt leer" 0 "$(sql "$KRYPT" "$ZIEL_LEER")"
+
+# Restore-Guards: age fehlt, Schlüsseldatei fehlt
+loeschen "$KRYPT"; anlegen "$KRYPT"
+if PATH="$TMP/minbin" DB_EXEC=true DB_NAME="$KRYPT" BACKUP_SCHLUESSEL="$TMP/schluessel.txt" "$BASH" "$WURZEL/betrieb/restore.sh" "$KDATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "Restore ohne installiertes age: Exit 1" 1 "$RC"
+pruefe_enthaelt "Restore ohne installiertes age: Meldung" "age ist nicht installiert" "$(cat "$TMP/e")"
+if BACKUP_SCHLUESSEL="$TMP/gibt-es-nicht.txt" restore "$KRYPT" "$KDATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "Restore mit fehlender Schlüsseldatei: Exit 1" 1 "$RC"
+pruefe_enthaelt "Restore mit fehlender Schlüsseldatei: Meldung nennt den Pfad" "$TMP/gibt-es-nicht.txt" "$(cat "$TMP/e")"
+pruefe_gleich "Restore mit fehlender Schlüsseldatei: Ziel bleibt leer" 0 "$(sql "$KRYPT" "$ZIEL_LEER")"
 
 # Abgeschnittene Sicherung: größer als ein age-Block (64 KiB), damit ohne Prüflauf schon Teile bei psql ankämen.
 sql_stdin "$QUELLE" <<'SQL'

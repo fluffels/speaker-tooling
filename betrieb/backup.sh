@@ -5,7 +5,7 @@
 # BACKUP_DIR         Zielordner, Standard <Repo>/backups.
 # BACKUP_EMPFAENGER  Datei mit öffentlichen age-Schlüsseln; gesetzt macht sie den Schutz aktiv. Standard $BACKUP_DIR/empfaenger.txt.
 # Schutz aktiv: BACKUP_EMPFAENGER gesetzt, ODER die Standard-Empfängerdatei existiert, ODER in BACKUP_DIR liegt schon eine *.sql.age.
-# Ist der Schutz aktiv, lehnt das Skript ab (Exit 1, keine Datei), statt Klartext zu schreiben.
+# Ist der Schutz aktiv, lehnt das Skript ab (Exit 1, keine Datei), statt Klartext zu schreiben; auch ein leer gesetztes BACKUP_EMPFAENGER zählt als gesetzt.
 set -euo pipefail
 umask 077
 
@@ -16,7 +16,7 @@ BACKUP_DIR="${BACKUP_DIR:-$WURZEL/backups}"
 mkdir -p "$BACKUP_DIR"
 
 schutz=0
-if [ -n "${BACKUP_EMPFAENGER-}" ] || [ -e "$BACKUP_DIR/empfaenger.txt" ]; then schutz=1; fi
+if [ -n "${BACKUP_EMPFAENGER+x}" ] || [ -e "$BACKUP_DIR/empfaenger.txt" ]; then schutz=1; fi
 for alt in "$BACKUP_DIR"/*.sql.age; do
   if [ -e "$alt" ]; then schutz=1; fi
 done
@@ -54,7 +54,7 @@ if [ "$schutz" = 1 ]; then
     | age -R "$BACKUP_EMPFAENGER" > "$tmp"
   st=("${PIPESTATUS[@]}")
   set -e
-  if [ "${st[1]}" -eq 3 ] && { [ "${st[0]}" -eq 0 ] || [ "${st[0]}" -eq 141 ]; }; then
+  if [ "${st[1]}" -eq 3 ] && [ "${st[0]}" -eq 0 ]; then
     fehler "Sicherung ist leer, verworfen: $datei"
     exit 1
   fi

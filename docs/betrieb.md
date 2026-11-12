@@ -57,7 +57,7 @@ docker compose exec -T db dropdb -U speakertooling speakertooling_probe
 | `BACKUP_EMPFAENGER` | Datei mit öffentlichen `age`-Schlüsseln (nur `backup.sh`); gesetzt macht sie den Schutz aktiv | `$BACKUP_DIR/empfaenger.txt` |
 | `BACKUP_SCHLUESSEL` | Datei mit der privaten `age`-Identität (nur `restore.sh`), nötig für `*.sql.age` | nicht gesetzt |
 
-`.env` wird nicht gelesen; abweichende Werte in der Shell setzen. Exit-Codes: 1 Aufruf, Sicherungsdatei (fehlt, nicht lesbar, leer, nicht entschlüsselbar; die Meldung nennt den Pfad) oder, bei aktivem Schutz, eine abgelehnte unverschlüsselte Sicherung, 2 Ziel nicht leer, sonst der Exit von `psql` bzw. `pg_dump`. Achtung: `psql` meldet auch einen Verbindungsfehler (etwa eine nicht vorhandene Datenbank) mit Exit 2; unterscheiden lässt er sich nur an der Meldung. Lokale Client-Werkzeuge müssen Major 18 sein, weil `pg_dump` 18 eine `\restrict`-Zeile schreibt, die ältere `psql` nicht kennen.
+`.env` wird nicht gelesen; abweichende Werte in der Shell setzen. Exit-Codes: 1 Aufruf, Sicherungsdatei (fehlt, nicht lesbar, leer, nicht entschlüsselbar; die Meldung nennt den Pfad) oder, bei aktivem Schutz, eine abgelehnte unverschlüsselte Sicherung bzw. ein Fehler in `pg_dump` oder `age` (dann Exit 1 statt des Tool-Exits), 2 Ziel nicht leer, sonst der Exit von `psql` bzw. `pg_dump`. Achtung: `psql` meldet auch einen Verbindungsfehler (etwa eine nicht vorhandene Datenbank) mit Exit 2; unterscheiden lässt er sich nur an der Meldung. Lokale Client-Werkzeuge müssen Major 18 sein, weil `pg_dump` 18 eine `\restrict`-Zeile schreibt, die ältere `psql` nicht kennen.
 
 ## Verschlüsselung einrichten
 
@@ -70,7 +70,7 @@ age-keygen -y ~/.config/speaker-tooling/sicherung.key > backups/empfaenger.txt  
 bash betrieb/backup.sh                             # ab jetzt *.sql.age
 ```
 
-- Ist der Schutz aktiv, **lehnt `backup.sh` eine unverschlüsselte Sicherung ab** (Exit 1, Meldung „unverschlüsselte Sicherung abgelehnt“, keine Datei): `age` fehlt, die Empfängerdatei fehlt oder ist ungültig, oder `age` schlägt fehl. Es fällt nie auf Klartext zurück. Wer das auch für einen frischen oder geleerten Ordner will, setzt `BACKUP_EMPFAENGER` fest (zum Beispiel in der Shell-Konfiguration).
+- Ist der Schutz aktiv, **lehnt `backup.sh` eine unverschlüsselte Sicherung ab** (Exit 1, Meldung „unverschlüsselte Sicherung abgelehnt“, keine Datei): `age` fehlt, die Empfängerdatei fehlt oder ist ungültig, oder `age` schlägt fehl (der Fehler mitten im Strom meldet „Sicherung fehlgeschlagen“, Exit 1, ebenfalls ohne Datei). Es fällt nie auf Klartext zurück. Eine leer gesetzte `BACKUP_EMPFAENGER` zählt als gesetzt und lehnt ab. Wer das auch für einen frischen oder geleerten Ordner will, setzt `BACKUP_EMPFAENGER` fest (zum Beispiel in der Shell-Konfiguration).
 - Schlüsselablage: die private Schlüsseldatei nie in `backups/` oder im Repo, sondern im Passwortmanager und zusätzlich offline. Einen zweiten Empfänger (Notfallschlüssel) trägst du als weitere Zeile in die Empfängerdatei ein. **Geht der Schlüssel verloren, sind alle verschlüsselten Sicherungen unlesbar.**
 - `age` authentifiziert keinen Absender: wer die Empfängerdatei kennt, kann eine gültige Sicherung bauen. Es bleibt bei „nur eigene Sicherungen einspielen“.
 
@@ -78,7 +78,7 @@ bash betrieb/backup.sh                             # ab jetzt *.sql.age
 
 Die Löschregel (nur dokumentiert, nicht automatisiert):
 
-- Eine Sicherung liegt **höchstens 30 Tage**. Damit ist ein gelöschter Kontakt spätestens nach 30 Tagen aus allen Sicherungen verschwunden.
+- Eine Sicherung liegt **höchstens 30 Tage**. Damit ist ein gelöschter Kontakt nach 30 Tagen aus allen Sicherungen verschwunden, außer aus der einen aufbewahrten geprüften (nächste Regel).
 - Die jüngste Sicherung mit bestandenem Probe-Restore bleibt immer liegen, auch wenn sie älter ist.
 - Klartext-Sicherungen aus der Zeit vor dem Schutz löschst du, sobald die erste verschlüsselte Sicherung einen Probe-Restore bestanden hat.
 - Kopien außer Haus (externe Platte, Cloud) gelten genauso und gehen nur verschlüsselt raus.
@@ -87,6 +87,8 @@ Die Löschregel (nur dokumentiert, nicht automatisiert):
 find backups \( -name '*.sql' -o -name '*.sql.age' \) -mtime +30            # erst ansehen
 find backups \( -name '*.sql' -o -name '*.sql.age' \) -mtime +30 -delete    # dann löschen; empfaenger.txt ist ausgenommen
 ```
+
+Vor dem `-delete` die jüngste geprüfte Sicherung ausnehmen, falls sie älter als 30 Tage ist (zum Beispiel `! -name <datei>` an den Befehl hängen); der Befehl allein kennt diese Regel nicht.
 
 `rm` überschreibt auf SSD und APFS nicht sicher; gelöschte Reste schützt nur die Verschlüsselung.
 
