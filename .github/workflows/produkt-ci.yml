@@ -1,6 +1,6 @@
 # Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests)
 # und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
-# Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Dependency Review; Struktur: Digest-Pins und needs.
+# Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Advisory-Prüfung des Graph-Vergleichs; Struktur: Digest-Pins und needs.
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -93,7 +93,7 @@ jobs:
 
   backend-abhaengigkeiten:
     # Transitive Maven-Abhängigkeiten in den Dependency-Graph (#24): die Submission lädt den aufgelösten Baum von backend/ hoch,
-    # danach prüft Dependency Review den PR gegen Advisories ab high (Default-Scope runtime wie der Kern-Check). Beides in einem Job:
+    # danach prüft ein eigener Schritt den PR gegen Advisories ab high (Scope runtime wie der Kern-Check). Beides in einem Job:
     # der Review-Step läuft nur auf PRs (Bedingung am Step), der Job selbst ist auf push nie skipped, sonst färbte der Aggregator main rot.
     # contents: write nur an diesem Job (Snapshot-API). Fork-PRs bekommen nur ein Lese-Token: die Submission scheitert, Produkt-CI ist rot (bewusst fail-closed).
     # Der Kern-Check "Abhängigkeiten prüfen (Dependency Review)" läuft parallel ohne Retry und kann den Snapshot verpassen; belastbar ist dieser Job.
@@ -122,31 +122,36 @@ jobs:
           # Absolut: die Action führt mvnw mit cwd=directory aus, ein relativer Pfad würde als backend/backend/mvnw gesucht.
           directory: ${{ github.workspace }}/backend
 
-      - name: Auf den Snapshot im Dependency-Graph warten (nur Pull Requests)
-        # Der Graph verarbeitet den Snapshot asynchron; retry-on-snapshot-warnings greift dafür nicht (Beleg: Lauf 43203522745, Review
-        # 8 s nach der Submission ohne Maven-Änderungen, die Compare-API zeigte sie kurz danach). Bis 120 s auf einen pom.xml-Eintrag im
-        # Compare warten; ein PR ohne Maven-Änderung hat keinen, dort läuft die Zeit ab und der Review startet trotzdem (Warnung).
+      - name: Advisories im Dependency-Graph prüfen (nur Pull Requests)
+        # Eigener Review statt actions/dependency-review-action: die Action ruft die Compare-API mit per_page=5 auf, die API pagt dann
+        # nach Manifest und liefert ohne Link-Header nur das erste (Beleg: Lauf 43204093727, die Action listete nur .github/workflows/produkt-ci.yml,
+        # `gh api '.../compare/<base>...<head>?per_page=5'` liefert 2 Einträge, ohne per_page 121 samt backend/app/pom.xml). Dieser Schritt ruft ohne
+        # Paging auf, wartet auf die asynchrone Verarbeitung des Snapshots (bis 120 s, nur wenn der PR eine pom.xml ändert) und
+        # schlägt bei einem neu hinzugefügten Runtime-Eintrag mit Advisory ab high fehl (Scope und Schwelle wie der Kern-Check).
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           BASIS: ${{ github.event.pull_request.base.sha }}
           KOPF: ${{ github.event.pull_request.head.sha }}
         run: |
-          for i in $(seq 1 24); do
-            if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/compare/$BASIS...$KOPF" --jq '.[].manifest' | grep -q 'pom\.xml$'; then
-              echo "Maven-Snapshot nach $((i * 5)) s im Graph"; exit 0
-            fi
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY"
+          warten=0
+          dateien=$(gh api "$api/compare/$BASIS...$KOPF" --jq '.files[].filename')
+          if grep -q 'pom\.xml$' <<< "$dateien"; then warten=24; fi
+          for i in $(seq 0 "$warten"); do
+            gh api "$api/dependency-graph/compare/$BASIS...$KOPF" > graph.json
+            if [ "$warten" -eq 0 ] || jq -e 'any(.[]; .manifest | endswith("pom.xml"))' graph.json > /dev/null; then break; fi
+            if [ "$i" -eq "$warten" ]; then echo "::error::Kein Maven-Snapshot im Dependency-Graph nach 120 s"; exit 1; fi
             sleep 5
           done
-          echo "::warning::Kein Maven-Snapshot im Compare nach 120 s (PR ohne Maven-Änderung oder Graph verzögert)"
-
-      - name: Dependency Review (nur Pull Requests)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: high
-          comment-summary-in-pr: never
-          retry-on-snapshot-warnings: true
+          echo "Einträge im Graph-Vergleich: $(jq length graph.json)"
+          jq -r '.[] | select(.change_type == "added" and .scope == "runtime")
+            | select(any(.vulnerabilities[]?; .severity == "high" or .severity == "critical"))
+            | "\(.manifest): \(.name)@\(.version): \([.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | .advisory_ghsa_id] | join(", "))"' graph.json > funde.txt
+          if [ -s funde.txt ]; then
+            echo "::error::Neue Runtime-Abhängigkeiten mit Advisory ab high:"; cat funde.txt; exit 1
+          fi
 
   struktur:
     name: Produkt-Struktur (Digest-Pins, needs)
