@@ -205,6 +205,11 @@ K2="$TMP/k2"; mkdir -p "$K2"; cp "$TMP/empfaenger.txt" "$K2/empfaenger.txt"
 KDATEI2="$(BACKUP_DIR="$K2" DB_NAME="$QUELLE" "$BASH" "$WURZEL/betrieb/backup.sh" 2>/dev/null)"; RC=$?
 pruefe_gleich "Standard-Empfängerdatei: Backup Exit 0" 0 "$RC"
 case "$KDATEI2" in *.sql.age) ok "Standard-Empfängerdatei: Datei endet auf .sql.age" ;; *) nok "Standard-Empfängerdatei: falsche Endung [$KDATEI2]" ;; esac
+# Leer gesetztes BACKUP_EMPFAENGER mit vorhandener Standarddatei: die Standarddatei wird benutzt
+sleep 1  # der Dateiname trägt nur Sekunden
+KDATEI3="$(BACKUP_EMPFAENGER='' BACKUP_DIR="$K2" DB_NAME="$QUELLE" "$BASH" "$WURZEL/betrieb/backup.sh" 2>/dev/null)"; RC=$?
+pruefe_gleich "Leere BACKUP_EMPFAENGER mit Standarddatei: Backup Exit 0" 0 "$RC"
+case "$KDATEI3" in *.sql.age) ok "Leere BACKUP_EMPFAENGER mit Standarddatei: Datei endet auf .sql.age" ;; *) nok "Leere BACKUP_EMPFAENGER mit Standarddatei: falsche Endung [$KDATEI3]" ;; esac
 
 # 5c. Rundlauf verschlüsselt
 anlegen "$KRYPT"
