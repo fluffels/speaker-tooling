@@ -38,6 +38,9 @@
       }
     ]
   },
+  "schichten": {
+    "layers": "scripts/layers.cjs"
+  },
   "adr": {
     "ordner": "docs/adr"
   },
