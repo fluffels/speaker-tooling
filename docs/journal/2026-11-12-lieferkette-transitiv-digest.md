@@ -16,7 +16,7 @@ Die Lieferkette des Produkts hat keine Lücken jenseits von Dependabot: transiti
 
 - Wächter-Rot-Beleg vor dem Pinnen: fünf Funde (`backend/Dockerfile:2` und `:12`, `frontend/Dockerfile:2` und `:9`, `compose.yaml:5`), nach dem Pinnen Exit 0.
 - Digest-Beobachtung: `docker pull postgres:17@sha256:<Digest von 18>` und `postgres --version` ergibt 18.6, der Digest entscheidet, nicht der Tag. `docker compose build` baut beide Images mit den Pins.
-- Proben im PR und Nach-Merge-Belege: siehe PR #PR_NR.
+- Proben im PR und Nach-Merge-Belege: siehe PR #32.
 
 ## Offen
 
