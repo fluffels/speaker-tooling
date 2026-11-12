@@ -8,7 +8,7 @@
 // Workflow-Feldern (`container:`, `services:`), Compose-Dienste über `extends` oder `include`, Dateien außerhalb der geschlossenen
 // Musterliste (`Dockerfile.dev`, `Containerfile`, `compose.override.yaml`; nur ein Fund von null Dateien schlägt fail-closed an).
 // Der Wächter schützt sich nicht selbst: wer `struktur` aus `needs` streicht, nimmt ihn aus dem Merge-Block.
-// Lokal: `node --test tools/produkt-struktur.test.mjs tools/produkt-graph.test.mjs && node tools/produkt-struktur.mjs` (`testGezielt` kennt nur Java-Pfade).
+// Lokal: `npx vitest run test/tools/produkt-struktur.test.ts test/tools/produkt-graph.test.ts && node tools/produkt-struktur.mjs` (`testGezielt` kennt nur Java-Pfade).
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

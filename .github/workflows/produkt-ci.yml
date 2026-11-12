@@ -216,7 +216,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Tests des Wächters
-        run: node --test tools/produkt-struktur.test.mjs tools/produkt-graph.test.mjs
+        run: npx vitest run test/tools/produkt-struktur.test.ts test/tools/produkt-graph.test.ts
 
       - name: Basis-Images gepinnt, alle Jobs in needs
         run: node tools/produkt-struktur.mjs

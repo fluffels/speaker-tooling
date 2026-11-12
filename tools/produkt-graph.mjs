@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 
 const SCHWELLE = new Set(["high", "critical"]);
 
+/**
+ * @param {Array<Record<string, any>>} changes Einträge der Compare-API
+ * @returns {string[]} je Fund eine Zeile `manifest: name@version: GHSA-…`
+ */
 export function pruefeGraph(changes) {
   return changes
     .filter((c) => c.change_type === "added" && c.scope === "runtime")
