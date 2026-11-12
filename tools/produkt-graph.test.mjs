@@ -1,9 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main, pruefeGraph } from "./produkt-graph.mjs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { main, pruefeGraph, wartenNoetig } from "./produkt-graph.mjs";
 
 const eintrag = (extra = {}) => ({
   manifest: "backend/app/pom.xml",
@@ -67,4 +70,49 @@ test("CLI: Exit 1 mit Fund in der Ausgabe, Exit 0 ohne Fund", () => {
     assert.ok(ausgabe.some((z) => z.includes("GHSA-1")));
   });
   mitDatei("[]", (pfad) => assert.equal(main(pfad), 0));
+});
+
+const SKRIPT = join(dirname(fileURLToPath(import.meta.url)), "produkt-graph.mjs");
+// Der Workflow wertet nur den Exit-Code des Prozesses aus: die Verdrahtung am Dateiende muss ihn setzen.
+function prozess(args, inhalt) {
+  const dir = mkdtempSync(join(tmpdir(), "produkt-graph-prozess-"));
+  try {
+    const datei = join(dir, "eingabe.txt");
+    writeFileSync(datei, inhalt);
+    try {
+      execFileSync(process.execPath, [SKRIPT, ...args, datei], { stdio: "ignore" });
+      return 0;
+    } catch (e) {
+      return e.status;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Prozess: Fund ist Exit 1, sauber Exit 0", () => {
+  assert.equal(prozess([], JSON.stringify([eintrag()])), 1);
+  assert.equal(prozess([], "[]"), 0);
+});
+
+test("Prozess: API-Fehlerobjekt, leere und kaputte Datei sind fail-closed (Exit 1)", () => {
+  assert.equal(prozess([], '{"message":"Not Found"}'), 1);
+  assert.equal(prozess([], ""), 1);
+  assert.equal(prozess([], "kein json"), 1);
+});
+
+test("Warten: pom.xml und .mvn/ auch in Unterordnern lösen es aus, andere Dateien nicht", () => {
+  assert.equal(wartenNoetig(["backend/pom.xml"]), true);
+  assert.equal(wartenNoetig(["pom.xml"]), true);
+  assert.equal(wartenNoetig(["backend/app/pom.xml"]), true);
+  assert.equal(wartenNoetig(["backend/.mvn/wrapper/maven-wrapper.properties"]), true);
+  assert.equal(wartenNoetig([".mvn/maven.config"]), true);
+  assert.equal(wartenNoetig(["frontend/package.json", "docs/x.md", "backend/app/src/Main.java"]), false);
+  assert.equal(wartenNoetig(["xpom.xml", "backend/foo.mvn/x"]), false);
+  assert.equal(wartenNoetig([]), false);
+});
+
+test("Prozess --warten: Exit 0 bei Treffer, 1 ohne", () => {
+  assert.equal(prozess(["--warten"], "docs/a.md\nbackend/.mvn/wrapper/maven-wrapper.properties\n"), 0);
+  assert.equal(prozess(["--warten"], "docs/a.md\nfrontend/package.json\n"), 1);
 });

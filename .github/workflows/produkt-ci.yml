@@ -182,7 +182,8 @@ jobs:
           api="repos/$GITHUB_REPOSITORY"
           warten=0
           dateien=$(gh api "$api/compare/$BASIS...$KOPF" --jq '.files[].filename')
-          if grep -qE '(^|/)pom\.xml$|^\.mvn/' <<< "$dateien"; then warten=24; fi
+          printf '%s\n' "$dateien" > "$RUNNER_TEMP/dateien.txt"
+          if node tools/produkt-graph.mjs --warten "$RUNNER_TEMP/dateien.txt"; then warten=24; fi
           for i in $(seq 0 "$warten"); do
             gh api -i "$api/dependency-graph/compare/$BASIS...$KOPF" > "$RUNNER_TEMP/antwort.txt"
             warnung=$(grep -i '^x-github-dependency-graph-snapshot-warnings:' "$RUNNER_TEMP/antwort.txt" | cut -d: -f2- | tr -d ' \r' || true)
@@ -192,7 +193,7 @@ jobs:
             [ "$i" -lt "$warten" ] && sleep 5
           done
           echo "Einträge im Graph-Vergleich: $(jq length "$RUNNER_TEMP/graph.json")"
-          node tools/produkt-graph.mjs "$RUNNER_TEMP/graph.json"
+          env -u GH_TOKEN node tools/produkt-graph.mjs "$RUNNER_TEMP/graph.json"
 
   struktur:
     name: Produkt-Struktur (Digest-Pins, needs)
