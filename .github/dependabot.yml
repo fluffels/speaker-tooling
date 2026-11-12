@@ -74,3 +74,92 @@ updates:
           - "patch"
     commit-message:
       prefix: "ci(actions)"
+
+  # --- Projekt-Einträge (Produkt, #11) ---
+  # Backend: Parent-POM in /backend, das Modul app hängt über <modules> daran. Majors kommen einzeln.
+  - package-ecosystem: "maven"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      maven-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Frontend: Angular-Familie samt vitest (@angular/build bindet vitest per Peer) in EINEM PR, dann die Sammelgruppe.
+  # Ein roter Angular-Major-PR ist gewollt der Anlass für `ng update` (Migrationen, passender TypeScript-Bereich).
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      frontend-angular:
+        patterns:
+          - "@angular/*"
+          - "@angular-devkit/*"
+          - "@schematics/angular"
+          - "vitest"
+          - "@vitest/*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      frontend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    # TypeScript folgt dem von Angular unterstützten Bereich (~6.0.2) und wird per `ng update` angehoben:
+    # ein Alleingang von Dependabot käme als dauerhaft roter PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # Basis-Images der Dockerfiles. Java- und Node-Majors sind Stack-Entscheidungen (ADR 0001, .nvmrc), kein Auto-Vorschlag.
+  - package-ecosystem: "docker"
+    directories:
+      - "/backend"
+      - "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # Images in compose.yaml. Ein Postgres-Major macht das Datenverzeichnis inkompatibel (Migration nötig).
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]

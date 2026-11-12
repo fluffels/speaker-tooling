@@ -32,6 +32,7 @@ Kern: [docs/referenz/anlaufstellen.md](https://github.com/fluffels/self-improvin
 |---|---|
 | [2026-11-04 Repo anlegen](../journal/2026-11-04-repo-anlegen.md) | um zu verstehen, warum ein frisch synchronisiertes Repo `verify` nicht besteht |
 | [2026-11-12 Produkt-CI als Required Check](../journal/2026-11-12-produkt-ci-required-check.md) | um zu verstehen, wie der Merge-Block durch Backend- und Frontend-Tests belegt wurde |
+| [2026-11-12 Lieferkette des Produkts](../journal/2026-11-12-lieferkette-produkt.md) | um zu verstehen, wie Dependabot, CodeQL (Java) und Frontend-Audit das Produkt bewachen und belegt wurden |
 
 ## Von der Fabrik übernommen
 
