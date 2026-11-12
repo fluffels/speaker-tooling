@@ -1,5 +1,5 @@
 # Mehrstufig: Build mit Maven Wrapper (ohne Tests, die laufen in der CI), danach Layered-JAR in ein schlankes JRE-Image.
-FROM eclipse-temurin:25-jdk AS build
+FROM eclipse-temurin:25-jdk@sha256:b8705e936964c228dfce359e63dbf08f6c69cb380ed1d576b1f6b1064f15567d AS build
 WORKDIR /build
 COPY mvnw pom.xml ./
 COPY .mvn .mvn
@@ -9,7 +9,7 @@ COPY app/src app/src
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q -DskipTests package
 RUN java -Djarmode=tools -jar app/target/app.jar extract --layers --launcher --destination /build/extracted
 
-FROM eclipse-temurin:25-jre
+FROM eclipse-temurin:25-jre@sha256:a640968ae55027b322cedd5f8228b01a84baff0b9e9360e47601c6a111ba1699
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
 WORKDIR /app
 COPY --from=build /build/extracted/dependencies/ ./
