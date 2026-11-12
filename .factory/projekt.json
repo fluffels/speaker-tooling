@@ -69,10 +69,13 @@
     "moduldoku": "docs/module"
   },
   "coverage": {
-    "berichte": [{ "format": "jacoco", "pfad": "backend/*/target/site/jacoco/jacoco.xml" }]
+    "berichte": [
+      { "format": "jacoco", "pfad": "backend/*/target/site/jacoco/jacoco.xml" },
+      { "format": "lcov", "pfad": "frontend/coverage/frontend/lcov.info", "basis": "frontend" }
+    ]
   },
   "befehle": {
-    "coverage": "node tools/mvn.mjs -B verify",
+    "coverage": "node tools/mvn.mjs -B verify && cd frontend && npx ng test --watch=false --coverage",
     "testGezielt": "node tools/test-gezielt.mjs"
   },
   "bereiche": {
