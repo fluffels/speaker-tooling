@@ -1,6 +1,6 @@
 # Betrieb: Sicherung und Wiederherstellung der Datenbank
 
-Zwei Bash-Skripte unter `betrieb/` sichern die PostgreSQL-Datenbank und spielen eine Sicherung in eine leere Datenbank zurück. Sie laufen unter macOS (`/bin/bash` 3.2), Linux und Git Bash.
+Zwei Bash-Skripte unter `betrieb/` sichern die PostgreSQL-Datenbank und spielen eine Sicherung in eine leere Datenbank zurück. Sie laufen unter macOS (`/bin/bash` 3.2) und Linux (beides in der CI belegt) und sind für Git Bash ausgelegt (Lauf offen, siehe [Journal](journal/2026-11-12-backup-restore.md#git-bash-lauf)). Relative Pfade (Sicherungsdatei, `BACKUP_DIR`) gelten ab der Repo-Wurzel, die Skripte wechseln dorthin.
 
 ## Sicherung
 
@@ -50,13 +50,13 @@ docker compose exec -T db dropdb -U speakertooling speakertooling_probe
 | `DB_USER` | Benutzer | `POSTGRES_USER`, sonst `speakertooling` |
 | `BACKUP_DIR` | Ordner der Sicherungen (nur `backup.sh`) | `backups/` im Repo |
 
-`.env` wird nicht gelesen; abweichende Werte in der Shell setzen. Exit-Codes: 1 Aufruf oder Sicherungsdatei (fehlt, nicht lesbar, leer; die Meldung nennt den Pfad), 2 Ziel nicht leer, sonst der Exit von `psql` bzw. `pg_dump`. Lokale Client-Werkzeuge müssen Major 18 sein, weil `pg_dump` 18 eine `\restrict`-Zeile schreibt, die ältere `psql` nicht kennen.
+`.env` wird nicht gelesen; abweichende Werte in der Shell setzen. Exit-Codes: 1 Aufruf oder Sicherungsdatei (fehlt, nicht lesbar, leer; die Meldung nennt den Pfad), 2 Ziel nicht leer, sonst der Exit von `psql` bzw. `pg_dump`. Achtung: `psql` meldet auch einen Verbindungsfehler (etwa eine nicht vorhandene Datenbank) mit Exit 2; unterscheiden lässt er sich nur an der Meldung. Lokale Client-Werkzeuge müssen Major 18 sein, weil `pg_dump` 18 eine `\restrict`-Zeile schreibt, die ältere `psql` nicht kennen.
 
 ## Sicherheit
 
 - Eine Sicherung ist Klartext und enthält künftig personenbezogene Daten (Kontakte, Honorare). Sie bleibt lokal, ist unverschlüsselt und kein CI-Artefakt; alte Sicherungen löschst du selbst.
 - Nur eigene Sicherungen einspielen: eine SQL-Datei kann `psql`-Metabefehle enthalten und ist ausführbarer Code.
-- Verschlüsselung und Aufbewahrung sind noch offen und stehen als Folgearbeit an.
+- Verschlüsselung und Aufbewahrung sind noch offen und stehen als Folgearbeit an (Ticket #33).
 
 ## Test
 

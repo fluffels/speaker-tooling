@@ -13,8 +13,8 @@
 
 ## Beleg
 
-- Lokal (macOS, `/bin/bash` 3.2.57, Compose-Datenbank `postgres:18`): `bash betrieb/test-rundlauf.sh` und `/bin/bash betrieb/test-rundlauf.sh` enden mit „Rundlauf-Test bestanden“ (26 Prüfungen).
-- Red-Green: Die Leer-Prüfung in `restore.sh` auf „immer leer“ verfälscht ließ den Test mit 6 Fehlern rot werden; die Dateiprüfung verfälscht ließ „Unlesbare Datei: Exit 1“ rot werden (erhalten Exit 2); danach zurückgesetzt, wieder grün.
+- Lokal (macOS, `/bin/bash` 3.2.57, Compose-Datenbank `postgres:18`): `bash betrieb/test-rundlauf.sh` und `/bin/bash betrieb/test-rundlauf.sh` enden mit „Rundlauf-Test bestanden“.
+- Red-Green (je einzeln verfälscht, Test rot, zurückgesetzt, grün): Leer-Prüfung auf „immer leer“, Dateiprüfung, `--single-transaction`, Relationsarten, Argumentzahl `-ne 1`, `! -f`, Leer-Prüfung und Überschreibschutz in `backup.sh`. Die Test-Lens fand zuerst sieben überlebende Verfälschungen; die Fälle dazu (kaputte Sicherung, Relationsarten, zwei Argumente, Verzeichnis, leerer Dump, vorhandene Datei über einen `date`-Stub) stehen jetzt im Test.
 - CI-Läufe der Jobs `betrieb-linux` und `betrieb-macos`: siehe PR (Link folgt mit dem Lauf).
 
 ## Git-Bash-Lauf

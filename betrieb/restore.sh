@@ -23,10 +23,11 @@ if [ ! -s "$datei" ]; then
 fi
 
 # Leer heißt: kein Schema außer public und den Systemschemata, und keine Relation. Der DB-Name steht nie im SQL-Text.
+# Indizes (relkind i) fehlen bewusst: sie kommen nie ohne Tabelle vor. Fremdtabellen (f) sind ungetestet (brauchen eine FDW-Erweiterung).
 sql="select nspname from pg_namespace where nspname not in ('public', 'pg_catalog', 'information_schema') and nspname not like 'pg\_%'
 union
 select distinct n.nspname from pg_class c join pg_namespace n on n.oid = c.relnamespace
-where c.relkind in ('r', 'p', 'v', 'm', 'S', 'f', 'i') and n.nspname not in ('pg_catalog', 'information_schema') and n.nspname not like 'pg\_toast%'
+where c.relkind in ('r', 'p', 'v', 'm', 'S', 'f') and n.nspname not in ('pg_catalog', 'information_schema') and n.nspname not like 'pg\_toast%'
 order by 1"
 # shellcheck disable=SC2086
 gefunden="$($DB_EXEC psql -U "$DB_USER" -d "$DB_NAME" -At -v ON_ERROR_STOP=1 -c "$sql" | tr -d '\r')"

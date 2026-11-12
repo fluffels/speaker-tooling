@@ -14,6 +14,10 @@ SUFFIX="$$"
 QUELLE="st_rundlauf_quelle_$SUFFIX"
 ZIEL="st_rundlauf_ziel_$SUFFIX"
 VOLL="st_rundlauf_voll_$SUFFIX"
+ART="st_rundlauf_art_$SUFFIX"
+KAPUTT="st_rundlauf_kaputt_$SUFFIX"
+BACKUPS_NEU=0
+if [ ! -d "$WURZEL/backups" ]; then BACKUPS_NEU=1; fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/rundlauf.XXXXXX")"
 
 ok() { echo "OK: $1"; }
@@ -36,8 +40,11 @@ aufraeumen() {
   loeschen "$QUELLE"
   loeschen "$ZIEL"
   loeschen "$VOLL"
+  loeschen "$ART"
+  loeschen "$KAPUTT"
   rm -rf "$TMP"
   [ -n "${STANDARD_DATEI-}" ] && rm -f "$STANDARD_DATEI"
+  if [ "$BACKUPS_NEU" = 1 ]; then rmdir "$WURZEL/backups" 2>/dev/null; fi
   return 0
 }
 trap aufraeumen EXIT
@@ -81,6 +88,43 @@ rm -f "$SA"
 if restore "$ZIEL" "$DATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Restore auf befülltes Ziel: Exit 2" 2 "$RC"
 pruefe_enthaelt "Meldung nennt nicht leer" "Ziel-Datenbank $ZIEL ist nicht leer" "$(cat "$TMP/e")"
+pruefe_enthaelt "Meldung nennt das gefundene Schema" "gefundene Schemata: app" "$(cat "$TMP/e")"
+
+# Jede Relationsart außerhalb der Systemschemata macht die Ziel-Datenbank nicht leer.
+for art in "view|create view public.v as select 1" "sequence|create sequence public.s" "matview|create materialized view public.m as select 1" "partitioniert|create table public.p (id int) partition by range (id)"; do
+  name="${art%%|*}"; stmt="${art#*|}"
+  loeschen "$ART"; anlegen "$ART"
+  echo "$stmt;" | sql_stdin "$ART"
+  if restore "$ART" "$DATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+  pruefe_gleich "Ziel mit Relationsart $name ist nicht leer: Exit 2" 2 "$RC"
+done
+
+# Kaputte Sicherung: Fehler mittendrin, es bleibt nichts zurück (eine Transaktion, ON_ERROR_STOP).
+KAPUTTE_DATEI="$TMP/kaputt.sql"
+cp "$DATEI" "$KAPUTTE_DATEI"; echo "select 1/0;" >> "$KAPUTTE_DATEI"
+loeschen "$KAPUTT"; anlegen "$KAPUTT"
+if restore "$KAPUTT" "$KAPUTTE_DATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+if [ "$RC" -ne 0 ]; then ok "Kaputte Sicherung: Exit ungleich 0"; else nok "Kaputte Sicherung: Exit war 0"; fi
+pruefe_gleich "Kaputte Sicherung: Ziel bleibt leer (Schema app fehlt)" 0 "$(sql "$KAPUTT" "select count(*) from pg_namespace where nspname = 'app'")"
+
+# backup.sh: Fehlerzweige
+LEERDIR="$TMP/leerbackup"
+if DB_EXEC=true BACKUP_DIR="$LEERDIR" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "Leerer Dump: Exit 1" 1 "$RC"
+pruefe_enthaelt "Leerer Dump: Meldung" "Sicherung ist leer, verworfen: $LEERDIR/" "$(cat "$TMP/e")"
+pruefe_gleich "Leerer Dump: nichts bleibt liegen" 0 "$(find "$LEERDIR" -type f | wc -l | tr -d ' ')"
+if DB_EXEC=false BACKUP_DIR="$LEERDIR" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+if [ "$RC" -ne 0 ]; then ok "Fehlschlagender pg_dump: Exit ungleich 0"; else nok "Fehlschlagender pg_dump: Exit war 0"; fi
+pruefe_gleich "Fehlschlagender pg_dump: nichts bleibt liegen" 0 "$(find "$LEERDIR" -type f | wc -l | tr -d ' ')"
+mkdir -p "$TMP/bin"
+printf '#!/bin/sh\necho 20260101-000000\n' > "$TMP/bin/date"; chmod +x "$TMP/bin/date"
+VORHANDEN="$LEERDIR/${QUELLE}-20260101-000000.sql"
+echo "alt" > "$VORHANDEN"
+if PATH="$TMP/bin:$PATH" DB_EXEC=true DB_NAME="$QUELLE" BACKUP_DIR="$LEERDIR" "$BASH" "$WURZEL/betrieb/backup.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "Vorhandene Sicherungsdatei: Exit 1" 1 "$RC"
+pruefe_enthaelt "Vorhandene Sicherungsdatei: Meldung nennt Pfad" "existiert schon, nichts überschrieben: $VORHANDEN" "$(cat "$TMP/e")"
+pruefe_gleich "Vorhandene Sicherungsdatei unverändert" "alt" "$(cat "$VORHANDEN")"
+pruefe_gleich "Vorhandene Sicherungsdatei: keine unvollständige Datei" 1 "$(find "$LEERDIR" -type f | wc -l | tr -d ' ')"
 pruefe_gleich "Ziel unverändert (4 Zeilen)" 4 "$(sql "$ZIEL" "select count(*) from app.notiz")"
 
 anlegen "$VOLL"
@@ -121,6 +165,11 @@ pruefe_gleich "Leere Datei: Exit 1" 1 "$RC"
 pruefe_enthaelt "Meldung nennt den Pfad der leeren Datei" "$LEER" "$(cat "$TMP/e")"
 if "$BASH" "$WURZEL/betrieb/restore.sh" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
 pruefe_gleich "Ohne Argument: Exit 1" 1 "$RC"
+if "$BASH" "$WURZEL/betrieb/restore.sh" "$DATEI" "$DATEI" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "Zwei Argumente: Exit 1" 1 "$RC"
+if restore "$ZIEL" "$TMP" >"$TMP/o" 2>"$TMP/e"; then RC=0; else RC=$?; fi
+pruefe_gleich "Verzeichnis statt Datei: Exit 1" 1 "$RC"
+pruefe_enthaelt "Verzeichnis statt Datei: Meldung nennt den Pfad" "$TMP" "$(cat "$TMP/e")"
 
 if [ "$FEHLER" -eq 0 ]; then echo "Rundlauf-Test bestanden"; exit 0; fi
 echo "Rundlauf-Test: $FEHLER Fehler"
