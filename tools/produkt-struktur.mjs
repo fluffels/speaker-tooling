@@ -60,7 +60,7 @@ export function pruefeNeeds(text, aggregator = "produkt-ci") {
 
 // Git-Pathspec ohne :(glob): `*` passt auch über `/`, `**/x` verlangt aber einen Ordner, darum Wurzel-Muster extra.
 const MUSTER = [
-  "Dockerfile", "**/Dockerfile", "*.Dockerfile", "**/*.Dockerfile",
+  "Dockerfile", "**/Dockerfile", "*.Dockerfile",
   "compose.y*ml", "**/compose.y*ml", "docker-compose.y*ml", "**/docker-compose.y*ml",
 ];
 const CI = ".github/workflows/produkt-ci.yml";

@@ -89,7 +89,8 @@ test("Dockerfile: Digest mit Ziffern ok, 63 und 65 Zeichen oder Anhang sind Fund
   assert.equal(pruefeCompose(`services:\n  db:\n    image: x@sha256:${H.slice(1)}\n`, "c").length, 1);
 });
 
-test("Dockerfile: kleingeschriebenes from zählt, Kommentar mit FROM nicht", () => {
+test("Dockerfile: kleingeschriebenes und eingerücktes from zählt, Kommentar mit FROM nicht", () => {
+  assert.equal(pruefeDockerfile("  FROM node:22\n", "D").length, 1);
   assert.equal(pruefeDockerfile("from node:22\n", "D").length, 1);
   assert.deepEqual(pruefeDockerfile(`from node:22@sha256:${H} as build\n`, "D"), []);
   assert.deepEqual(pruefeDockerfile("# FROM node:22\n", "D"), []);
@@ -107,6 +108,9 @@ test("Compose: ohne services oder mit leerem Dienst kein Absturz, kein Fund", ()
 
 test("needs: ohne jobs ist ein Fund, anderer Aggregator wird respektiert", () => {
   assert.equal(pruefeNeeds("name: x\n").length, 1);
+  assert.match(pruefeNeeds("jobs:\n  a:\n    runs-on: x\n")[0], /fehlt in jobs/);
+  assert.match(pruefeNeeds("jobs: x\n")[0], /fehlt in jobs/);
+  assert.match(pruefeNeeds("jobs:\n  a:\n    runs-on: x\n  produkt-ci:\n")[0], /kein needs/);
   const text = "jobs:\n  a:\n    runs-on: x\n  produkt-ci:\n    needs: [a]\n  gesamt:\n    needs: [a, produkt-ci]\n";
   assert.deepEqual(pruefeNeeds(text, "gesamt"), []);
   assert.equal(pruefeNeeds(text, "produkt-ci").length, 1);
@@ -151,7 +155,7 @@ test("CLI: alle Dateiformen werden gefunden und richtig geprüft, gepinnt ist Ex
     const rot = lauf(dirRot);
     assert.equal(rot.code, 1);
     assert.equal(rot.meldungen.length, pfade.length);
-    for (const p of pfade) assert.ok(rot.meldungen.some((m) => m.includes(`${p}:`)), p);
+    for (const p of pfade) assert.ok(rot.meldungen.some((m) => m.startsWith(`✖ ${p}:`)), p);
     assert.equal(lauf(dirGruen).code, 0);
   } finally {
     rmSync(dirRot, { recursive: true, force: true });
