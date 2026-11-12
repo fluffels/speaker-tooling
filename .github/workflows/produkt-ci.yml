@@ -1,5 +1,6 @@
 # Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests)
 # und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
+# Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Dependency Review; Struktur: Digest-Pins und needs.
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -90,14 +91,79 @@ jobs:
       - name: Lockfile auditieren (high, inklusive Dev-Abhängigkeiten)
         run: npm audit --audit-level=high
 
+  backend-abhaengigkeiten:
+    # Transitive Maven-Abhängigkeiten in den Dependency-Graph (#24): die Submission lädt den aufgelösten Baum von backend/ hoch,
+    # danach prüft Dependency Review den PR gegen Advisories ab high (Default-Scope runtime wie der Kern-Check). Beides in einem Job:
+    # der Review-Step läuft nur auf PRs (Bedingung am Step), der Job selbst ist auf push nie skipped, sonst färbte der Aggregator main rot.
+    # contents: write nur an diesem Job (Snapshot-API). Fork-PRs bekommen nur ein Lese-Token: die Submission scheitert, Produkt-CI ist rot (bewusst fail-closed).
+    # Der Kern-Check "Abhängigkeiten prüfen (Dependency Review)" läuft parallel ohne Retry und kann den Snapshot verpassen; belastbar ist dieser Job.
+    name: Backend-Abhängigkeiten (Maven-Submission, Dependency Review)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Java 25 einrichten
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: backend/**/pom.xml
+
+      - name: Maven-Abhängigkeitsbaum an den Dependency-Graph senden
+        uses: advanced-security/maven-dependency-submission-action@a64327a7329c9939cf675e458452febe1894a70c # v6.0.1
+        with:
+          directory: backend
+
+      - name: Dependency Review (nur Pull Requests)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+          retry-on-snapshot-warnings: true
+
+  struktur:
+    name: Produkt-Struktur (Digest-Pins, needs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        run: npm ci --ignore-scripts
+
+      - name: Tests des Wächters
+        run: node --test tools/produkt-struktur.test.mjs
+
+      - name: Basis-Images gepinnt, alle Jobs in needs
+        run: node tools/produkt-struktur.mjs
+
   produkt-ci:
     # Required Check im Ruleset main-schutz (#9): grün nur, wenn jeder Job in needs success meldet.
-    # Neuer Produkt-Job: hier in needs eintragen, sonst blockiert er den Merge nicht.
+    # Neuer Produkt-Job: hier in needs eintragen, sonst blockiert er den Merge nicht (Wächter: Job `struktur`, tools/produkt-struktur.mjs).
     name: Produkt-CI
     needs:
       - backend
       - frontend
       - frontend-audit
+      - backend-abhaengigkeiten
+      - struktur
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
