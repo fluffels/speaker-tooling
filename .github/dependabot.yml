@@ -133,6 +133,8 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # Basis-Images der Dockerfiles. Java- und Node-Majors sind Stack-Entscheidungen (ADR 0001, .nvmrc), kein Auto-Vorschlag.
+  # Alle FROM-Zeilen stehen als `<tag>@sha256:<digest>` (#24, Wächter: tools/produkt-struktur.mjs): Dependabot frischt den Digest
+  # unter demselben Tag auf, der Cooldown (7 Tage) gilt auch dafür. Das Testcontainers-Literal in Java sieht Dependabot nicht.
   - package-ecosystem: "docker"
     directories:
       - "/backend"
@@ -149,7 +151,7 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
-  # Images in compose.yaml. Ein Postgres-Major macht das Datenverzeichnis inkompatibel (Migration nötig).
+  # Images in compose.yaml, ebenfalls per Digest gepinnt (siehe Docker-Eintrag). Ein Postgres-Major macht das Datenverzeichnis inkompatibel (Migration nötig).
   - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:

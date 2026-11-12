@@ -1,6 +1,7 @@
 # Produkt-CI: baut und testet das Java-Backend mit Maven (./mvnw verify, inklusive Testcontainers-Integrationstests)
 # und das Angular-Frontend (ng build, ng test); der Frontend-Audit prüft frontend/package-lock.json auf Advisories (high).
 # Der Job backend misst danach die Diff-Coverage des Produkts (check:diffcoverage: JaCoCo-Bericht des Backends und lcov des Frontends gegen den Diff, Schichten und Floors laut scripts/layers.cjs).
+# Backend-Abhängigkeiten: Maven-Dependency-Submission (transitive Artefakte im Dependency-Graph) plus Advisory-Prüfung des Graph-Vergleichs (tools/produkt-graph.mjs); Struktur: Digest-Pins und needs.
 # Läuft auf jedem PR ohne Pfadfilter; der Job Produkt-CI ist Required Check im Ruleset main-schutz. Die Harness-Gates laufen in ci.yml.
 name: Produkt-CI
 
@@ -130,14 +131,106 @@ jobs:
       - name: Lockfile auditieren (high, inklusive Dev-Abhängigkeiten)
         run: npm audit --audit-level=high
 
+  backend-abhaengigkeiten:
+    # Transitive Maven-Abhängigkeiten in den Dependency-Graph (#24): die Submission lädt den aufgelösten Baum von backend/ hoch,
+    # danach prüft ein eigener Schritt den PR gegen Advisories ab high (Scope runtime wie der Kern-Check). Beides in einem Job:
+    # der Review-Step läuft nur auf PRs (Bedingung am Step), der Job selbst ist auf push nie skipped, sonst färbte der Aggregator main rot.
+    # contents: write nur an diesem Job (Snapshot-API). Fork-PRs bekommen nur ein Lese-Token: die Submission scheitert, Produkt-CI ist rot (bewusst fail-closed).
+    # Der Kern-Check "Abhängigkeiten prüfen (Dependency Review)" sieht das Maven-Manifest wegen per_page=5 der Action nicht (Schritt unten); belastbar ist dieser Job.
+    name: Backend-Abhängigkeiten (Maven-Submission, Dependency Review)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Java 25 einrichten
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: backend/**/pom.xml
+
+      - name: Maven-Abhängigkeitsbaum an den Dependency-Graph senden
+        uses: advanced-security/maven-dependency-submission-action@a64327a7329c9939cf675e458452febe1894a70c # v6.0.1
+        with:
+          # Absolut: die Action führt mvnw mit cwd=directory aus, ein relativer Pfad würde als backend/backend/mvnw gesucht.
+          directory: ${{ github.workspace }}/backend
+
+      - name: Advisories im Dependency-Graph prüfen (nur Pull Requests)
+        # Eigener Review statt actions/dependency-review-action: die Action ruft die Compare-API mit per_page=5 auf, die API pagt dann
+        # nach Manifest und liefert ohne Link-Header nur das erste (Beleg: Lauf 43204093727, die Action listete nur .github/workflows/produkt-ci.yml,
+        # `gh api '.../compare/<base>...<head>?per_page=5'` liefert 2 Einträge, ohne per_page 121 samt backend/app/pom.xml). Dieser Schritt ruft ohne
+        # Paging auf und wertet mit tools/produkt-graph.mjs (getestet) neue Runtime-Einträge mit Advisory ab high aus (Scope und Schwelle wie der Kern-Check).
+        # Der Graph verarbeitet den Snapshot asynchron. Fertig heißt: der Warn-Header x-github-dependency-graph-snapshot-warnings ist leer
+        # (gleich viele Snapshots an Basis und Kopf) oder der Vergleich enthält schon einen pom.xml-Eintrag (Basis ohne Snapshot, etwa im
+        # ersten PR). Gewartet wird bis 120 s nur bei geänderter Maven-Konfiguration (pom.xml, .mvn/); danach läuft die Auswertung trotzdem
+        # (Warnung; beide node-Aufrufe laufen ohne GH_TOKEN, das Tool braucht es nicht; die Dateiliste der Compare-API endet bei 300 Dateien, ein
+        # größerer PR kann die Warte-Auslöser verdrängen, ebenfalls fail-open:  ein später verarbeiteter Snapshot bliebe unbemerkt, bekannte Grenze). Ein leerer Vergleich bei fertigem Snapshot
+        # (pom.xml ohne Änderung am Baum, etwa ein Plugin-Bump) ist grün. Zwischendateien liegen in RUNNER_TEMP, nicht im Checkout.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASIS: ${{ github.event.pull_request.base.sha }}
+          KOPF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY"
+          warten=0
+          dateien=$(gh api "$api/compare/$BASIS...$KOPF" --jq '.files[].filename')
+          printf '%s\n' "$dateien" > "$RUNNER_TEMP/dateien.txt"
+          if env -u GH_TOKEN node tools/produkt-graph.mjs --warten "$RUNNER_TEMP/dateien.txt"; then warten=24; fi
+          for i in $(seq 0 "$warten"); do
+            gh api -i "$api/dependency-graph/compare/$BASIS...$KOPF" > "$RUNNER_TEMP/antwort.txt"
+            warnung=$(grep -i '^x-github-dependency-graph-snapshot-warnings:' "$RUNNER_TEMP/antwort.txt" | cut -d: -f2- | tr -d ' \r' || true)
+            sed -n '/^\r\{0,1\}$/,$p' "$RUNNER_TEMP/antwort.txt" | tail -n +2 > "$RUNNER_TEMP/graph.json"
+            if [ -z "$warnung" ] || jq -e 'any(.[]; .manifest | endswith("pom.xml"))' "$RUNNER_TEMP/graph.json" > /dev/null; then break; fi
+            if [ "$i" -eq "$warten" ] && [ "$warten" -gt 0 ]; then echo "::warning::Maven-Snapshot nach 120 s nicht bestätigt, Auswertung trotzdem"; fi
+            [ "$i" -lt "$warten" ] && sleep 5
+          done
+          echo "Einträge im Graph-Vergleich: $(jq length "$RUNNER_TEMP/graph.json")"
+          env -u GH_TOKEN node tools/produkt-graph.mjs "$RUNNER_TEMP/graph.json"
+
+  struktur:
+    name: Produkt-Struktur (Digest-Pins, needs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        run: npm ci --ignore-scripts
+
+      - name: Tests des Wächters
+        run: npx vitest run test/tools/produkt-struktur.test.ts test/tools/produkt-graph.test.ts
+
+      - name: Basis-Images gepinnt, alle Jobs in needs
+        run: node tools/produkt-struktur.mjs
+
   produkt-ci:
     # Required Check im Ruleset main-schutz (#9): grün nur, wenn jeder Job in needs success meldet.
-    # Neuer Produkt-Job: hier in needs eintragen, sonst blockiert er den Merge nicht.
+    # Neuer Produkt-Job: hier in needs eintragen, sonst blockiert er den Merge nicht (Wächter: Job `struktur`, tools/produkt-struktur.mjs).
     name: Produkt-CI
     needs:
       - backend
       - frontend
       - frontend-audit
+      - backend-abhaengigkeiten
+      - struktur
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
