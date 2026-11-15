@@ -44,16 +44,31 @@ it("Fixture: Import auf fehlende Datei ist ein Fund, vorhandene und mit ../ aufg
     `const z = await import("./lib/fehlt.mjs");`,
   ].join("\n");
   const f = pruefeImporte("scripts/lib/c.mjs", text, vorhanden);
-  expect(f.length).toBe(3);
-  expect(f[0]).toMatch(/c\.mjs:1: .*lens-arm-lib\.mjs/);
+  expect(f).toEqual([
+    "scripts/lib/c.mjs:1: Import ./lens-arm-lib.mjs zeigt auf keine versionierte Datei (scripts/lib/lens-arm-lib.mjs)",
+    "scripts/lib/c.mjs:2: Import ./a.mjs zeigt auf keine versionierte Datei (scripts/lib/a.mjs)",
+    "scripts/lib/c.mjs:4: Import ./lib/fehlt.mjs zeigt auf keine versionierte Datei (scripts/lib/lib/fehlt.mjs)",
+  ]);
   expect(pruefeImporte("scripts/c.mjs", `import { y } from "./a.mjs";\nimport("./lib/b.mjs");`, vorhanden)).toEqual([]);
   expect(pruefeImporte("scripts/c.mjs", `import "node:fs";\nimport x from "vitest";`, vorhanden)).toEqual([]);
+});
+
+it("Fixture: ../ mit einfachen Quotes, Re-Export und Seiteneffekt-Import auf fehlende Datei sind Funde", () => {
+  const vorhanden = new Set(["scripts/a.mjs"]);
+  expect(pruefeImporte("scripts/lib/c.mjs", `export { q } from '../fehlt.mjs';`, vorhanden).length).toBe(1);
+  expect(pruefeImporte("scripts/lib/c.mjs", `import { q } from "../../scripts/a.mjs";`, vorhanden)).toEqual([]);
+  expect(pruefeImporte("scripts/c.mjs", `import "./fehlt.mjs";`, vorhanden).length).toBe(1);
+  expect(pruefeImporte("scripts/c.mjs", `import "./a.mjs";`, vorhanden)).toEqual([]);
 });
 
 it("Fixture: node scripts/<datei> auf fehlende Datei ist ein Fund", () => {
   const vorhanden = new Set(["scripts/da.mjs"]);
   expect(pruefeAufrufe("package.json", `"x": "node scripts/fehlt.mjs && node scripts/da.mjs"`, vorhanden).length).toBe(1);
   expect(pruefeAufrufe("ci.yml", "run: node scripts/da.mjs --x\n", vorhanden)).toEqual([]);
+  // ohne node-Präfix kein Aufruf; Unterordner werden geprüft
+  expect(pruefeAufrufe("README", "siehe scripts/fehlt.mjs", vorhanden)).toEqual([]);
+  expect(pruefeAufrufe("ci.yml", "run: node scripts/docs-gen/fehlt.mjs", vorhanden).length).toBe(1);
+  expect(pruefeAufrufe("ci.yml", "run: node scripts/docs-gen/da.mjs", new Set(["scripts/docs-gen/da.mjs"]))).toEqual([]);
   expect(zeilen(pruefeAufrufe("ci.yml", "a\nrun: node scripts/fehlt.cjs\n", vorhanden)[0])[0]).toMatch(/ci\.yml:2: /);
 });
 

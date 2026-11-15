@@ -133,7 +133,7 @@ jobs:
 
   # Post-hoc-Netz auf main: ein roter `main` trotz grüner PR-Checks öffnet ein Alarm-Issue, nur auf push und ohne den Workflow zu blockieren. Die Mechanik
   # (Dedup, Board-Position, PROJECT_TOKEN) wohnt im Kern-Workflow alarm-rot-main.yml; das Label (ein existierendes Label des Projekts) kommt als Input.
-  # Die Job-ID bleibt alarm-red-main (dependabot-inbox.yml nennt sie). Die Produkt-CI trägt denselben Aufruf in produkt-ci.yml (Job alarm-rot-main).
+  # Die Job-ID alarm-red-main bleibt wie im Kern (ci.yml der Fabrik). Die Produkt-CI trägt denselben Aufruf in produkt-ci.yml (Job alarm-rot-main).
   alarm-red-main:
     name: Alarm bei rotem main
     needs: [build-test, security-audit]

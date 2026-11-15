@@ -182,3 +182,7 @@ it("needs: Job am Aggregator ohne Alarm-uses oder Alarm-uses ohne Aggregator-nee
   expect(pruefeNeeds(mitAlarm(`    uses: ${ALARM}\n`))[0]).toMatch(/alarm-rot-main/);
   expect(pruefeNeeds(mitAlarm("    needs: [produkt-ci]\n    uses: ./.github/workflows/anderer.yml\n"))[0]).toMatch(/alarm-rot-main/);
 });
+
+it("needs: Job ohne Rumpf stürzt nicht ab (Guard j?.uses)", () => {
+  expect(pruefeNeeds("jobs:\n  a:\n  produkt-ci:\n    needs: [a]\n")).toEqual([]);
+});
