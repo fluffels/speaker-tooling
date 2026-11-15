@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-// @ts-expect-error reines ESM-Skript ohne Typen
 import { erfuellt, version } from "../../scripts/setup.mjs";
 
 it("version liest Mindestangaben mit und ohne Präfix, unlesbar ist null", () => {
