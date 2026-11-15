@@ -34,7 +34,7 @@ function lauf(engines: string | null) {
     copyFileSync("scripts/direktaufruf.mjs", join(tmp, "scripts", "direktaufruf.mjs"));
     writeFileSync(join(tmp, "package.json"), JSON.stringify(engines === null ? {} : { engines: { node: engines } }));
     // Git exportiert in Hooks GIT_DIR & Co.; sie würden den Temp-Ordner auf das echte Repo zeigen lassen.
-    const env = { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() };
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() };
     for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[k];
     const r = spawnSync(process.execPath, [join(tmp, "scripts", "setup.mjs")], { cwd: tmp, encoding: "utf8", env });
     return { status: r.status, aus: `${r.stdout}${r.stderr}` };
