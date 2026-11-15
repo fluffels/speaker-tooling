@@ -13,7 +13,8 @@ import { ladeRulesetSpiegel } from "./docs-gen/ruleset-spiegel.mjs";
 import { MANIFEST_PFAD, manifestAusText, pflichtChecksFehler, wirdVerteilt } from "./besitz-lib.mjs";
 import { GRENZE_PRIVAT, LINK_ACTIONS, LINK_RULESET, pruefeSicherheit } from "./harness-doctor-sicherheit.mjs";
 import { ausFehler as ausFehlerRoh, gut, luecke, nichtPruefbar } from "./harness-doctor-ergebnis.mjs";
-import { rulesetPunkte } from "./harness-doctor-ruleset.mjs";
+import { pinPunkt, rulesetPunkte } from "./harness-doctor-ruleset.mjs";
+import { langfusePunkt } from "./harness-doctor-langfuse.mjs";
 import { istWorkflowDatei } from "./workflow-blockform.mjs";
 import { manifestKenntModule, MODUL_STANDARD, modulFormFehler, modulWahl } from "./modul-wahl-lib.mjs";
 
@@ -358,6 +359,7 @@ export function pruefe({ config, voraussetzungen, spiegel, gh, langfuse, umgebun
     const branch = r.repo.default_branch ?? "main";
     const regeln = hole(() => seiten(gh, `repos/${repo}/rules/branches/${branch}?per_page=100`));
     ergebnis.push(...pruefeRuleset(regeln, r.repo, spiegel, sollChecks(voraussetzungen, spiegel)));
+    ergebnis.push(...pinPunkt(regeln));
     ergebnis.push(...pruefeSicherheit({ ...quellen, regeln, pvr: hole(() => json(gh, ["api", `repos/${repo}/private-vulnerability-reporting`])), spiegel, branch, privat: r.repo.private === true }));
   } else {
     const aus = { fehler: "gh nicht angemeldet oder ohne Zugriff", fix: "erst den Token-Punkt beheben" };
@@ -366,11 +368,7 @@ export function pruefe({ config, voraussetzungen, spiegel, gh, langfuse, umgebun
   ergebnis.push(...pruefeSprache(config)); // liest nur die Config, braucht kein Token
   const module = modulPunkt(config, voraussetzungen.manifest, { configPfad: PROJEKT_CONFIG, manifestFehler: voraussetzungen.besitzFehler }); // Sicherheits-Module (factory#119), ebenfalls ohne Token
   if (module !== null) ergebnis.push(module);
-  if (langfuse) {
-    const lf = langfuse();
-    const text = String(lf.stderr || lf.stdout || "").trim().split("\n")[0];
-    ergebnis.push(lf.status === 0 ? gut("Langfuse") : luecke("Langfuse", text || "Langfuse nicht erreichbar", "Langfuse starten (node scripts/langfuse-vorbedingung.mjs zeigt den Befund)"));
-  }
+  if (langfuse) ergebnis.push(langfusePunkt(langfuse()));
   if (umgebung) ergebnis.push(...pruefeAltnamen({ env: umgebung.env, config, namen: umgebung.namen }));
   ergebnis.push(...besitzPunkt(voraussetzungen)); // liest nur das Manifest, braucht kein Token
   return ergebnis;

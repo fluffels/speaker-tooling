@@ -1,5 +1,5 @@
-// Lib ohne Direktaufruf-Guard; `factory-update-check.mjs` und `tag-takt.mjs` importieren sie (Konvention #1398, Folge #103).
-/* Release-Tags lesen und vergleichen: nur Tags der Form `v1.2.3` oder `1.2.3` zählen (Pre-Release und Fremdtags nicht). Alles pur, keine Imports. */
+// Lib ohne Direktaufruf-Guard; `factory-update-check.mjs`, `factory-sync.mjs`, `tag-takt.mjs` und `probe-erstbezug.mjs` importieren sie (Konvention #1398, Folge #103).
+/* Release-Tags lesen und vergleichen: nur Tags der Form `v1.2.3` oder `1.2.3` zählen (Pre-Release und Fremdtags nicht). Dazu die Update-Schritte samt Werkzeug-Hinweis und die Probe-Profil-Namen (factory#224). Alles pur, keine Imports. */
 
 const RELEASE = /^v?(\d+)\.(\d+)\.(\d+)$/;
 
@@ -21,7 +21,7 @@ export function vergleicheTags(tags) {
 }
 
 /** Hinweis für den Sync-Schritt (Tag-Ticket und Update-Meldung): das eigene Werkzeug kennt ein neues Manifest-Format womöglich noch nicht. */
-export const WERKZEUG_HINWEIS = "Scheitert das eigene Werkzeug am neuen Manifest („version N unbekannt“), einmal das Werkzeug der Quelle fahren: `node <quelle>/scripts/factory-sync.mjs --quelle <quelle> --tag <tag>`.";
+export const WERKZEUG_HINWEIS = "Scheitert das eigene Werkzeug an einer Prüfung des neuen Manifests (etwa „version N unbekannt“ oder eine Regel, die der neue Stand nicht mehr erfüllt), einmal das Werkzeug der Quelle fahren: `node <quelle>/scripts/factory-sync.mjs --quelle <quelle> --tag <tag>`.";
 
 const schritt = (id, befehl, erklaerung, mechanisch = false) => ({ id, befehl, text: `\`${befehl}\`${erklaerung}`, ...(mechanisch ? { mechanisch } : {}) });
 
@@ -41,3 +41,17 @@ export const UPDATE_SCHRITTE = [
 
 /** Pur: die Befehle der mechanischen Schritte in Reihenfolge, `<pfad>` durch `quelle` ersetzt. */
 export const mechanischeSchritte = (quelle) => UPDATE_SCHRITTE.filter((s) => s.mechanisch).map((s) => s.befehl.replaceAll("<pfad>", quelle));
+
+/** Ordner der Profil-Fixtures der synthetischen Bezieher (factory#224, nur in der Fabrik): je Datei `<profil>.json` ein Profil ohne Stellvertreter. */
+export const PROFIL_ORDNER = "test/fixtures/probe-profil";
+
+/** Gültiger Profilname (einzige Quelle für `--profil` und `profilNamen`). */
+export const PROFIL_NAME = /^[a-z][a-z0-9-]*$/u;
+
+/** Pur: die Profilnamen aus einer Dateiliste: nur `<name>.json` mit `^[a-z][a-z0-9-]*$` als Name, sortiert ohne Endung; alles andere wird ignoriert. */
+export function profilNamen(dateinamen) {
+  return dateinamen
+    .map((d) => /^(.+)\.json$/u.exec(d)?.[1])
+    .filter((n) => n !== undefined && PROFIL_NAME.test(n))
+    .sort();
+}

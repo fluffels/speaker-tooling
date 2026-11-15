@@ -11,7 +11,7 @@ import { istProjektOrdner } from "./transkript.mjs";
 import { escapeRegex } from "./regex-lib.mjs";
 import { callsDerSitzung } from "./transkript-calls.mjs";
 import { queryMetrics, usageAusObservation } from "./langfuse-api.mjs";
-import { beobachtungsId, traceIdVon, subagentSpanId, scoreId } from "./langfuse-otlp.mjs";
+import { beobachtungsId, traceIdVon } from "./langfuse-otlp.mjs";
 
 /** Eine Session, deren Dateien jünger sind, läuft noch: ihre Calls sind noch nicht (vollständig) in Langfuse. */
 export const RUHEFRIST_MIN = 30;
@@ -79,9 +79,6 @@ export function ledgerLesen(datei) {
   return { ledger: leeresLedger(), kaputt: true };
 }
 
-// Die ID-Funktionen stehen in langfuse-otlp.mjs (pur, ohne langfuse-api); hier nur weitergereicht.
-export { beobachtungsId, traceIdVon, subagentSpanId, scoreId };
-
 // ── Soll (pur) ───────────────────────────────────────────────────────────────
 
 /** `<praefixe.worktree><nr>` aus dem Branch-Namen, sonst null. `worktree` ist `praefixe.worktree` der Projekt-Config (Pflicht, kein Standardwert). */
@@ -122,6 +119,24 @@ export function sollEintraege(sitzung, { session = sitzung.id, worktree } = {}) 
 export const sollMitZuordnung = (soll, map) => soll.map((e) => ({ ...e, zuordnung: map.get(e.messageId) ?? {} }));
 
 const jsonlDateien = (dir) => (existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".jsonl")) : []);
+
+/**
+ * Session-Angabe (volle ID oder Präfix) über alle Ordner unter `projectsRoot` auflösen (factory#354, wie `alleOrdner` bei `--session`):
+ * `{ id }` bei einem Treffer, `{ fehler: "nicht gefunden" }` ohne, `{ fehler: "mehrdeutig", kandidaten }` (sortiert, volle IDs) bei mehreren.
+ * Ein exakter Treffer gewinnt gegen Präfix-Treffer; dieselbe ID in mehreren Ordnern zählt einmal. Die Angabe wird nur verglichen, nie in einen Pfad gesetzt.
+ */
+export function sessionAufloesen({ projectsRoot, angabe }) {
+  const ids = new Set();
+  if (angabe && existsSync(projectsRoot)) {
+    for (const d of readdirSync(projectsRoot)) {
+      for (const datei of jsonlDateien(join(projectsRoot, d))) ids.add(datei.replace(/\.jsonl$/, ""));
+    }
+  }
+  if (ids.has(angabe)) return { id: angabe };
+  const kandidaten = [...ids].filter((id) => id.startsWith(angabe)).sort();
+  if (kandidaten.length === 1) return { id: kandidaten[0] };
+  return kandidaten.length ? { fehler: "mehrdeutig", kandidaten } : { fehler: "nicht gefunden" };
+}
 
 /**
  * Sessions des Projekts: `[{ id, pfad, mtime, groesse }]` (mtime = jüngste Datei der Session, groesse = Bytes von Haupt- und Subagent-Dateien).

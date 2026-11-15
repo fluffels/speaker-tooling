@@ -189,8 +189,8 @@ export function pruefeExtraktion(liste, { getrackt, besitz, quelle, ringe = RING
 const IMPORT_ENDUNGEN = ["", ".ts", ".mjs", ".cjs", ".js"];
 
 /**
- * Alle Importspezifizierer eines Quelltexts (ohne Auflösung, mit `node:*` und Paketnamen): statische `import`/`export … from` (auch Side-Effect), `import("…")`,
- * `require("…")`, `createRequire(…)("…")` und die großzügige Aufruf-Form `)("…")` (fail-closed). Nicht erkannt: ein dynamischer Pfad (`require(pfad)`).
+ * Alle Importspezifizierer eines Quelltexts (ohne Auflösung, mit `node:*` und Paketnamen): statische `import`/`export … from` (auch Side-Effect), dynamisches `import` mit Literal,
+ * `require` mit Literal, `createRequire` mit anschließendem Aufruf und die großzügige Aufruf-Form (schließende Klammer, dann Literal in Klammern; fail-closed). Nicht erkannt: ein dynamischer Pfad (`require(pfad)`).
  */
 export function importeAus(text) {
   return [

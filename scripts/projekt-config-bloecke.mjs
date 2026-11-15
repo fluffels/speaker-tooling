@@ -1,11 +1,13 @@
 // Form-Prüfer der Blöcke der Projekt-Config (factory#162 L22): reine Funktionen `pruefeX(wert) → Fehlerliste` für struktur, sprache, ausnahmen, datengroesse, gates, factoryLinks, labels, skills,
 // berechtigungen, sandbox und die Literal-Objekte. `projekt-config-lib.mjs` importiert sie (`pruefeProjektConfig`, Accessoren); dieses Modul importiert nichts aus ihr (Blatt, kein Zyklus).
-// Nur Blatt-Importe: `regex-lib.mjs` (nur Builtins), `relativ-pfad.mjs` (importfrei), `pfad-glob.mjs` (nur relativ-pfad), `quellwurzeln-lib.mjs` (nur Builtins, pfad-glob und relativ-pfad) und `spezifikation-lib.mjs` (zieht `markdown.mjs` und `repo-form.mjs`, nur Builtins).
+// Nur Blatt-Importe: `regex-lib.mjs` (nur Builtins), `relativ-pfad.mjs` (importfrei), `pfad-glob.mjs` (nur relativ-pfad), `quellwurzeln-lib.mjs` (nur Builtins, pfad-glob und relativ-pfad), `modul-wahl-lib.mjs` (importfrei, `NAME_MUSTER`), `gate-befehl-lib.mjs` (importiert nur `flag-lib.mjs` und `quellwurzeln-lib.mjs`, `E2E_UMGEBUNG`) und `spezifikation-lib.mjs` (zieht `markdown.mjs` und `repo-form.mjs`, nur Builtins).
 import { istRelativPosix } from "./relativ-pfad.mjs";
 import { GATE_FORM } from "./regex-lib.mjs";
 import { globMaengel } from "./pfad-glob.mjs";
 import { spracheMaengel } from "./spezifikation-lib.mjs";
 import { endungenMaengel, quellenMaengel } from "./quellwurzeln-lib.mjs";
+import { NAME_MUSTER } from "./modul-wahl-lib.mjs";
+import { E2E_UMGEBUNG } from "./gate-befehl-lib.mjs";
 
 export const istText = (v) => typeof v === "string" && v.trim() !== "";
 export const istObjekt = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -227,6 +229,42 @@ export function pruefeRisiko(b) {
   return fehler;
 }
 
+const SAMMEL_WORKFLOW = /^[A-Za-z0-9._-]+\.ya?ml$/;
+const SAMMEL_JOB = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+function sammelEintragFehler(e, i) {
+  if (!istObjekt(e)) return [`sammelChecks[${i}] muss ein Objekt { workflow, job } sein`];
+  const fehler = Object.keys(e).filter((k) => k !== "workflow" && k !== "job").map((k) => `sammelChecks[${i}].${k} ist kein bekannter Schlüssel (erlaubt: workflow, job)`);
+  if (typeof e.workflow !== "string" || !SAMMEL_WORKFLOW.test(e.workflow)) fehler.push(`sammelChecks[${i}].workflow muss ein Dateiname unter .github/workflows/ sein (ohne /, Endung .yml oder .yaml): ${JSON.stringify(e.workflow)}`);
+  if (typeof e.job !== "string" || !SAMMEL_JOB.test(e.job)) fehler.push(`sammelChecks[${i}].job muss eine Job-ID sein (Buchstabe oder _, dann Buchstaben, Ziffern, _ oder -): ${JSON.stringify(e.job)}`);
+  return fehler;
+}
+
+/** Pur: prüft den optionalen Schlüssel `sammelChecks` (factory#401): nicht leere Liste aus `{ workflow, job }` (Workflow-Dateiname unter `.github/workflows/`, Job-ID des Sammel-Jobs), jedes Paar höchstens einmal; fehlt der Schlüssel, entfällt der Doctor-Punkt Sammel-Check. */
+export function pruefeSammelChecks(liste) {
+  if (liste === undefined) return [];
+  if (!Array.isArray(liste) || liste.length === 0) return ["sammelChecks muss eine nicht leere Liste aus { workflow, job } sein"];
+  const fehler = liste.flatMap(sammelEintragFehler);
+  const paare = liste.filter(istObjekt).map((e) => `${e.workflow}/${e.job}`);
+  const doppelt = paare.filter((p, i) => paare.indexOf(p) !== i);
+  return [...fehler, ...[...new Set(doppelt)].map((p) => `sammelChecks enthält ${p} doppelt`)];
+}
+
+/** Pur: prüft den optionalen Block `audit` (factory#395): `verzeichnisse` ist eine Liste repo-relativer POSIX-Pfade ohne Doppelte (npm-Lockfile-Verzeichnisse zusätzlich zur Wurzel; leer erlaubt); fehlt der Block, wird nur die Wurzel geprüft. */
+export function pruefeAudit(b) {
+  if (b === undefined) return [];
+  if (!istObjekt(b)) return ["audit muss ein Objekt mit dem Schlüssel verzeichnisse sein"];
+  const fehler = Object.keys(b).filter((k) => k !== "verzeichnisse").map((k) => `audit.${k} ist kein bekannter Schlüssel (erlaubt: verzeichnisse)`);
+  const liste = b.verzeichnisse;
+  if (!Array.isArray(liste)) return [...fehler, "audit.verzeichnisse muss eine Liste repo-relativer Pfade sein"];
+  liste.forEach((p, i) => {
+    if (!istText(p)) fehler.push(`audit.verzeichnisse[${i}] muss ein nicht-leerer String (repo-relativer Pfad) sein`);
+    else if (!istRelativPosix(p)) fehler.push(`audit.verzeichnisse[${i}] muss ein repo-relativer POSIX-Pfad sein: ${JSON.stringify(p)}`);
+  });
+  const doppelt = liste.filter((p, i) => istText(p) && liste.indexOf(p) !== i);
+  return [...fehler, ...[...new Set(doppelt)].map((p) => `audit.verzeichnisse enthält ${p} doppelt`)];
+}
+
 const SANDBOX_KEYS = ["allowedDomains", "envVars"];
 
 const VORPRUEFUNG_KEYS = ["befehle", "userScopeServer"];
@@ -288,4 +326,28 @@ export function pruefeLiterale(wert, schluessel) {
   if (wert[schluessel] === undefined) return [];
   if (!istObjekt(wert[schluessel])) return [`${schluessel} muss ein Objekt (Name → String) sein`];
   return Object.entries(wert[schluessel]).filter(([, lit]) => !istText(lit)).map(([name]) => `${schluessel}.${name} muss ein nicht-leerer String sein`);
+}
+
+/** Pur: prüft das optionale e2e-Gate-Profil (factory#246): Block `e2e` mit der Liste `browser` und `befehle.e2e` gehören zusammen; fehlen beide, ist nichts zu prüfen (kein Profil, keine Meldung). */
+export function pruefeE2e(e2e, befehle) {
+  const hatBefehl = istObjekt(befehle) && befehle.e2e !== undefined;
+  if (e2e === undefined) return hatBefehl ? ["befehle.e2e ist gesetzt, aber der Block e2e fehlt.\nFix: den Block e2e mit der Liste browser ergänzen oder befehle.e2e entfernen."] : [];
+  if (!istObjekt(e2e)) return ["e2e muss ein Objekt mit der Liste browser sein.\nFix: e2e als { \"browser\": [\"<name>\"] } schreiben."];
+  const fehler = Object.keys(e2e).filter((k) => k !== "browser").map((k) => `e2e.${k} ist kein bekannter Schlüssel (erlaubt: browser).\nFix: den Schlüssel entfernen.`);
+  fehler.push(...browserMaengel(e2e.browser));
+  if (!hatBefehl || !istText(befehle.e2e)) fehler.push(`e2e braucht befehle.e2e als nicht-leere Befehlszeile.\nFix: befehle.e2e setzen (der Befehl liest den Browser aus ${E2E_UMGEBUNG.browser}) oder den Block e2e entfernen.`);
+  return fehler;
+}
+
+/** Pur: Formfehler der Liste `e2e.browser` (nicht leer, Namen nach `NAME_MUSTER`, ohne Doppelte). */
+function browserMaengel(liste) {
+  const fix = "\nFix: e2e.browser als nicht-leere Liste von Namen aus Kleinbuchstaben, Ziffern und - mit Buchstabe am Anfang angeben (z. B. [\"a\", \"b\"]).";
+  if (!Array.isArray(liste) || liste.length === 0) return [`e2e.browser muss eine nicht-leere Liste von Browser-Namen sein.${fix}`];
+  const gesehen = new Set();
+  return liste.flatMap((n, i) => {
+    if (typeof n !== "string" || !NAME_MUSTER.test(n)) return [`e2e.browser[${i}] muss ein Name aus Kleinbuchstaben, Ziffern und - mit Buchstabe am Anfang sein (${JSON.stringify(n)}).${fix}`];
+    if (gesehen.has(n)) return [`e2e.browser enthält „${n}“ doppelt.${fix}`];
+    gesehen.add(n);
+    return [];
+  });
 }

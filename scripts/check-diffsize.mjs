@@ -49,6 +49,15 @@
  * Dateien zählen weiter. Zeilengenau (`git diff -U0`, Maske der alten und der neuen Fassung); ist etwas nicht
  * eindeutig lesbar (kaputte Marker, git-Fehler, Umbenennung), zählt alles.
  *
+ * Sammelticket-PR (factory#358): Ein Override gilt für EINE Zeile eines Sammeltickets, nie für die ganze Auswahl. Trägt
+ * der PR-Titel den Titel eines Sammeltickets und ist ein Override-Grund aktiv, muss dieser Grund genau eine Zeile
+ * (`L<n>`) nennen, sonst rot (`sammelOverrideFehler`). Lokal ohne Ereignis-Datei (`GITHUB_EVENT_PATH` fehlt, factory#402 L5) kennt der Lauf den Titel nicht und
+ * wertet vorsorglich den Grund allein: nennt er mehrere verschiedene Zeilen `L<n>`, ist er rot (`sammelOverrideLokal`); ein
+ * Nicht-Sammelticket mit Zeilenliste im Grund ist damit lokal rot, in der CI grün (Abhilfe steht in der Meldung). Ein Ereignis ohne PR (push auf main, workflow_dispatch) wird nie lokal gewertet. Grenzen: der Titel
+ * kommt aus dem Ereignis (`GITHUB_EVENT_PATH`); geprüft wird nur der aktive jüngste Grund; ein
+ * unlesbares PR-Ereignis ist rot (fail-closed). Der PR-Titel ist Fremdtext: nur lineare Muster, er steht nie in
+ * einer Ausgabe, und der Pfad kann nur rot machen, nie etwas durchlassen.
+ *
  * Reines Node-Skript (nur Builtins). Die Mess-/Bewertungslogik ist als pure,
  * git-freie Funktionen exportiert und wird von test/diffsize.test.ts importiert —
  * EINE Quelle der Wahrheit für Budget, Parsing und Override-Logik.
@@ -59,6 +68,8 @@
 import { fileURLToPath } from "node:url";
 import { istDirektaufruf } from "./direktaufruf.mjs";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { enthaeltSammelticketTitel } from "./sammelticket-titel.mjs";
 import { resolveBase } from "./check-basis.mjs";
 import { umgebungsWert } from "./projekt-config-lib.mjs";
 import { ladeCommitZeilen, ladeCommitZeilenOderBeende, meldeUngueltigeOverrides, sliceOverride, staleOverrideHinweis, versetzteOverrideHinweis } from "./slice-override.mjs";
@@ -253,13 +264,58 @@ function ohneGenZeilen(git, base, files, wurzeln) {
   }
 }
 
+/** Titel des PR aus dem Ereignis-JSON (`GITHUB_EVENT_PATH`): null ohne Ereignis oder ohne PR-Ereignis, `{ titel }`,
+ *  sonst `{ fehler }` (unlesbar, kaputt, kein Titeltext; fail-closed). `lies(pfad)` liefert den Dateitext. Pur. */
+export function prTitelAusEreignis(env, lies) {
+  const pfad = env.GITHUB_EVENT_PATH;
+  if (!pfad) return null;
+  try {
+    const ereignis = JSON.parse(lies(pfad));
+    if (ereignis === null || typeof ereignis !== "object" || !("pull_request" in ereignis)) return null;
+    const titel = ereignis.pull_request.title;
+    return typeof titel === "string" ? { titel } : { fehler: "PR ohne Titeltext im Ereignis" };
+  } catch {
+    return { fehler: "PR-Ereignis nicht lesbar" };
+  }
+}
+
+/** Die verschiedenen Zeilenmarken `L<n>` eines Override-Grunds (Wortgrenzen, dieselbe Zeile zählt einmal). Pur. */
+const zeilenMarken = (grund) => new Set(String(grund).match(/\bL\d+\b/g));
+
+/** Lokale Vorprüfung ohne PR-Ereignis (factory#402 L5): der Grund nennt mehrere verschiedene Zeilen `L<n>` → Meldung (ohne Titel), sonst null. Pur. */
+export function sammelOverrideLokal(grund) {
+  if (zeilenMarken(grund).size <= 1) return null;
+  return (
+    "Lokal ohne PR-Titel: der Override-Grund nennt mehrere Zeilen L<n>; bei einem Sammelticket gilt er nur für eine einzelne Zeile. " +
+    "Kein Sammelticket: den Grund ohne Zeilenliste formulieren."
+  );
+}
+
+/** Meldung (ohne Titel), wenn ein Sammelticket-PR einen Override-Grund trägt, der nicht genau eine Zeile `L<n>` nennt; sonst null. Pur. */
+export function sammelOverrideFehler(titel, grund) {
+  if (!enthaeltSammelticketTitel(titel)) return null;
+  if (zeilenMarken(grund).size === 1) return null;
+  return (
+    "Der Diffsize-Override gilt bei einem Sammelticket nur für eine einzelne Zeile: " +
+    "der Grund muss genau eine Zeile L<n> nennen, nicht die ganze Auswahl. Besser: den Slice teilen."
+  );
+}
+
+/** Prüft den aktiven Override-Grund gegen den PR-Titel (null = ok oder nicht prüfbar, sonst die Meldung). */
+function sammelOverrideUrteil(env, lies, reason) {
+  if (reason === null) return null;
+  const e = prTitelAusEreignis(env, lies);
+  if (e === null) return env.GITHUB_EVENT_PATH ? null : sammelOverrideLokal(reason); // nur ohne Ereignis-Datei (lokal); ein Nicht-PR-Ereignis der CI bleibt ungeprüft
+  return "fehler" in e ? e.fehler : sammelOverrideFehler(e.titel, reason);
+}
+
 /** Zeilen einer numstat-Datei, die zum Slice zählen (ohne `GEN:`-Anteil). */
 const zaehlZeilen = (f) => f.added + f.deleted - (f.gen ?? 0);
 
 /** Führt die komplette Prüfung aus (Basis auflösen → Diff messen → bewerten →
  *  Override/stale einordnen). `runGit`/`env` injizierbar für den Test. Rückgabe
  *  ist ein strukturiertes Ergebnis; das CLI rendert es nur noch. */
-export function checkDiffSize({ runGit, env = process.env, docgenWurzeln, zeilen = ladeCommitZeilen() } = {}) {
+export function checkDiffSize({ runGit, env = process.env, docgenWurzeln, zeilen = ladeCommitZeilen(), lies = (p) => readFileSync(p, "utf8") } = {}) {
   const git = runGit ?? ((args) => execFileSync("git", args, { encoding: "utf8" }));
   const thresholds = readThresholds(env);
   const base = resolveBase(git, env);
@@ -319,6 +375,7 @@ export function checkDiffSize({ runGit, env = process.env, docgenWurzeln, zeilen
     reason,
     allowed: over && reason !== null, // bewusst durchgelassen
     stale: !over && reason !== null, // Override unnötig → melden
+    sammelOverride: sammelOverrideUrteil(env, lies, reason),
     invalidOverrides: invalid,
     versetzteOverrides: versetzt,
   };
@@ -357,6 +414,11 @@ function main() {
   }
 
   meldeUngueltigeOverrides(r.invalidOverrides, { dim });
+
+  if (r.sammelOverride) {
+    console.error(red(`✖ check:diffsize: ${r.sammelOverride}`));
+    process.exit(1);
+  }
 
   if (r.stale) {
     console.error(red(staleOverrideHinweis(zeilen.diffsizeOverride, `der Diff liegt im Budget (${measured} ≤ ${budget})`)));
