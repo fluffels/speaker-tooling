@@ -12,7 +12,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** `22.23.4` (auch `>=22.23.4`, `v22`) als [major, minor, patch]; unlesbar: null. */
 export function version(text) {
-  const m = /^\s*(?:>=\s*)?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(text ?? ""));
+  const m = /^\s*(?:>=\s*)?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(text));
   return m ? [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)] : null;
 }
 

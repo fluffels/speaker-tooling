@@ -54,7 +54,7 @@ const ALARM_WORKFLOW = "./.github/workflows/alarm-rot-main.yml";
 
 export function pruefeNeeds(text, aggregator = "produkt-ci") {
   const jobs = parseDocument(text).get("jobs")?.toJSON?.() ?? {};
-  const alsListe = (n) => (n === undefined ? [] : Array.isArray(n) ? n : [n]);
+  const alsListe = (n) => (Array.isArray(n) ? n : [n]);
   const istAlarm = (j) => j?.uses === ALARM_WORKFLOW && alsListe(j.needs).includes(aggregator);
   const rest = Object.keys(jobs).filter((k) => k !== aggregator && !istAlarm(jobs[k]));
   if (!(aggregator in jobs)) return [`Job ${aggregator} fehlt in jobs`];
