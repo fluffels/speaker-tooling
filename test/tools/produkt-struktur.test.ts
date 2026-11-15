@@ -166,3 +166,19 @@ it("CLI: needs-Fund aus produkt-ci.yml macht Exit 1", () => {
   const dir = repo({ [CI]: CI_OK.replace("[a]", "[]"), Dockerfile: `FROM node:22@sha256:${H}\n` });
   try { expect(lauf(dir).code).toBe(1); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+const ALARM = "./.github/workflows/alarm-rot-main.yml";
+const mitAlarm = (alarm: string) =>
+  `jobs:\n  a:\n    runs-on: x\n  produkt-ci:\n    needs: [a]\n    runs-on: x\n  alarm-rot-main:\n${alarm}`;
+
+it("needs: Alarm-Job (Kern-Workflow, hängt am Aggregator) ist ausgenommen", () => {
+  expect(pruefeNeeds(mitAlarm(`    needs: [produkt-ci]\n    uses: ${ALARM}\n`))).toEqual([]);
+  expect(pruefeNeeds(mitAlarm(`    needs: produkt-ci\n    uses: ${ALARM}\n`))).toEqual([]);
+});
+
+it("needs: Job am Aggregator ohne Alarm-uses oder Alarm-uses ohne Aggregator-needs bleibt ein Fund", () => {
+  expect(pruefeNeeds(mitAlarm("    needs: [produkt-ci]\n    runs-on: x\n"))[0]).toMatch(/alarm-rot-main/);
+  expect(pruefeNeeds(mitAlarm(`    needs: [a]\n    uses: ${ALARM}\n`))[0]).toMatch(/alarm-rot-main/);
+  expect(pruefeNeeds(mitAlarm(`    uses: ${ALARM}\n`))[0]).toMatch(/alarm-rot-main/);
+  expect(pruefeNeeds(mitAlarm("    needs: [produkt-ci]\n    uses: ./.github/workflows/anderer.yml\n"))[0]).toMatch(/alarm-rot-main/);
+});

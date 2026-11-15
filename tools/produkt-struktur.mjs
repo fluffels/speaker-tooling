@@ -3,6 +3,8 @@
 // (`<tag>@sha256:<64 hex>`), damit ein neu gepushter Tag das gebaute Image nicht verändert; Dependabot pflegt den Digest.
 // (2) Jeder Job in .github/workflows/produkt-ci.yml außer dem Aggregator `produkt-ci` steht in dessen `needs`
 // (der Aggregator wertet nur `toJSON(needs)` aus, ein Job außerhalb von `needs` würde den Merge nicht blockieren).
+// Ausgenommen ist nur der Alarm-Aufruf: ein Job mit `uses: ./.github/workflows/alarm-rot-main.yml`, der selbst am Aggregator hängt
+// (er läuft danach und alarmiert bei rotem main; ihn in `needs` zu führen gäbe einen Zyklus).
 // Exit 0 sauber, 1 bei Funden (Format `pfad:zeile: Meldung`) oder wenn keine Docker-/Compose-Datei gefunden wird.
 // Grenzen, nicht erfasst: `docker run` in Workflow-Steps, Image-Literale in Java (Testcontainers), Images in anderen
 // Workflow-Feldern (`container:`, `services:`), Compose-Dienste über `extends` oder `include`, Dateien außerhalb der geschlossenen
@@ -48,9 +50,13 @@ export function pruefeCompose(text, pfad) {
   return funde;
 }
 
+const ALARM_WORKFLOW = "./.github/workflows/alarm-rot-main.yml";
+
 export function pruefeNeeds(text, aggregator = "produkt-ci") {
   const jobs = parseDocument(text).get("jobs")?.toJSON?.() ?? {};
-  const rest = Object.keys(jobs).filter((k) => k !== aggregator);
+  const alsListe = (n) => (n === undefined ? [] : Array.isArray(n) ? n : [n]);
+  const istAlarm = (j) => j?.uses === ALARM_WORKFLOW && alsListe(j.needs).includes(aggregator);
+  const rest = Object.keys(jobs).filter((k) => k !== aggregator && !istAlarm(jobs[k]));
   if (!(aggregator in jobs)) return [`Job ${aggregator} fehlt in jobs`];
   const needs = jobs[aggregator]?.needs;
   if (needs === undefined) return [`Job ${aggregator} hat kein needs`];

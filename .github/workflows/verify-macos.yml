@@ -35,4 +35,4 @@ jobs:
         run: npm ci
 
       - name: Gate-Kette
-        run: npm run verify
+        run: node scripts/gate-befehl.mjs verifyKompakt
