@@ -7,7 +7,7 @@
  *  bei der Umstellung von Zeilen auf Zeichen (AGENTS.md 73.612, CLAUDE.md 18.068 Zeichen) +
  *  kleine Kopffreiheit. Das ist KEIN Aufweichen: das alte Zeilen-Budget hat die Größe nie
  *  gemessen. Im zweiten #1064-Slice wurde AGENTS.md auf ~24k Zeichen gekürzt
- *  (Langbegründung nach Factory-Seite docs/agent-harness.md §3a) und das Budget auf 28.000 gezogen
+ *  (Langbegründung nach Factory-Seite [docs/agent-harness.md §3](../docs/agent-harness.md#3-die-fitness-functions-im-detail)) und das Budget auf 28.000 gezogen
  *  (Ist + ~15 %, wie beim ersten Kalibrieren; Ratchet nach unten). Mit #1078 (Slice A1) sind
  *  die Nachschlage-Tabellen der CLAUDE.md on-demand nach docs/referenz/ gezogen; seit #1087 ist
  *  CLAUDE.md gelöscht (AGENTS.md wird nativ geladen) und ihr Eintrag entfallen – dass sie nicht
@@ -22,57 +22,67 @@ export function countChars(text) {
   return text.replace(/\r/g, "").length;
 }
 
-/**
- * Pur: die Kontextdateien aus `budgets`, die über ihrem Budget liegen, als `[{ file, chars, budget }]`. `lies(datei)` liefert den Text oder `null` (fehlt: zählt nicht);
- * `ausnahmen` = geduldete Dateien (`ausnahmen.kontext` der Projekt-Config, `[{ datei }]`), die nie gemeldet werden.
- */
-export function ueberBudget({ lies, budgets = CONTEXT_BUDGETS, ausnahmen = [] }) {
+/** Pur: Stand je Kontextdatei aus `budgets` als `[{ file, chars, budget, rest }]` (eine Schleife für `ueberBudget` und `knappeBudgets`); fehlende Dateien und geduldete Ausnahmen fehlen. `lies(datei)` liefert den Text oder `null`. */
+function budgetStaende({ lies, budgets, ausnahmen }) {
   const geduldet = new Set(ausnahmen.map((a) => a.datei));
-  const treffer = [];
-  for (const { file, budget } of budgets) {
-    if (geduldet.has(file)) continue;
-    const text = lies(file);
-    const chars = text === null ? 0 : countChars(text);
-    if (chars > budget) treffer.push({ file, chars, budget });
-  }
-  return treffer;
-}
-
-/** Anteil des Budgets, unter dem der Rest als knapp gilt (factory#215 L12). */
-export const KNAPP_ANTEIL = 0.05;
-
-/**
- * Pur: die Kontextdateien, die noch im Budget liegen, deren Rest aber unter `anteil` des Budgets liegt, als `[{ file, chars, budget, rest }]`.
- * Über Budget zählt nicht (das meldet `ueberBudget`); `lies`/`ausnahmen` wie dort.
- */
-export function knappeBudgets({ lies, budgets = CONTEXT_BUDGETS, ausnahmen = [], anteil = KNAPP_ANTEIL }) {
-  const geduldet = new Set(ausnahmen.map((a) => a.datei));
-  const treffer = [];
+  const staende = [];
   for (const { file, budget } of budgets) {
     if (geduldet.has(file)) continue;
     const text = lies(file);
     if (text === null) continue;
     const chars = countChars(text);
-    const rest = budget - chars;
-    if (rest >= 0 && rest < budget * anteil) treffer.push({ file, chars, budget, rest });
+    staende.push({ file, chars, budget, rest: budget - chars });
+  }
+  return staende;
+}
+
+/**
+ * Pur: die Kontextdateien aus `budgets`, die über ihrem Budget liegen, als `[{ file, chars, budget }]`. `lies(datei)` liefert den Text oder `null` (fehlt: zählt nicht);
+ * `ausnahmen` = geduldete Dateien (`ausnahmen.kontext` der Projekt-Config, `[{ datei }]`), die nie gemeldet werden.
+ */
+export function ueberBudget({ lies, budgets = CONTEXT_BUDGETS, ausnahmen = [] }) {
+  return budgetStaende({ lies, budgets, ausnahmen }).filter((s) => s.rest < 0).map(({ file, chars, budget }) => ({ file, chars, budget }));
+}
+
+/** Anteil des Budgets, unter dem der Rest als knapp gilt (factory#215 L12); gilt für jede Datei ohne Raum-Vertrag. */
+export const KNAPP_ANTEIL = 0.05;
+
+/**
+ * Pur: die Kontextdateien, die noch im Budget liegen, aber knapp sind, als `[{ file, chars, budget, rest }]`; über Budget zählt nicht (das meldet `ueberBudget`).
+ * Knapp heißt: Rest unter `anteil` des Budgets. Für die Datei `raum.file` (AGENTS.md) gilt der Raum-Vertrag statt der Anteilsregel (factory#237, löst die Überlappung aus factory#220 L57):
+ * der Projekt-Block (Gesamt minus Kern-Block) über `raum.zeichen` ist knapp (Treffer mit `projekt` und `raum`), darunter nie; fehlen die Marker, greift der Anteil.
+ * `raum` = `{ file, zeichen, marker: { start, ende } }`, die Lib bleibt Blatt (Marker liefert der Aufrufer).
+ */
+export function knappeBudgets({ lies, budgets = CONTEXT_BUDGETS, ausnahmen = [], anteil = KNAPP_ANTEIL, raum = null }) {
+  const treffer = [];
+  for (const s of budgetStaende({ lies, budgets, ausnahmen })) {
+    if (s.rest < 0) continue;
+    const kern = raum !== null && s.file === raum.file ? kernBlockZeichen(lies(s.file), raum.marker) : null;
+    if (kern === null) {
+      if (s.rest < s.budget * anteil) treffer.push(s);
+    } else if (s.chars - kern > raum.zeichen) {
+      treffer.push({ ...s, projekt: s.chars - kern, raum: raum.zeichen });
+    }
   }
   return treffer;
 }
 
 /** Zeichen-Budget des Kern-Blocks von AGENTS.md (zwischen den Besitz-Markern `kern`, ohne den Projekt-Block): Ratchet auf den Ist-Wert, wächst nur bewusst per reviewtem Commit
  *  (factory#208 L19: der Kern wuchs zwischen zwei Tags um ~1,1k Zeichen und brachte einen Bezieher über sein Gesamtbudget). */
-export const KERN_BLOCK_BUDGET = 15_437; // factory#269: +450 für den Eingangsfilter der Harness-Zeilen (Klasse, Beleg, Verfall); Raum sinkt gleich
+export const KERN_BLOCK_BUDGET = 15_200; // factory#222: -100 (Fabrik-Klausel in den Projekt-Block, Raum wächst gleich); davor factory#221: -137 (Ratchet-Test test/kern-block-budget.test.ts: Abstand < 100) (Rollen-Text für Harness-Befunde abgebaut), Raum wächst gleich; davor factory#269: +450 für den Eingangsfilter der Harness-Zeilen
 
 /** Raum, den der Kern jedem Bezieher außerhalb des Kern-Blocks in AGENTS.md lässt (Projekt-Block samt Projektwerten): `KERN_BLOCK_BUDGET + PROJEKT_BLOCK_RAUM` ist genau das Gesamtbudget von AGENTS.md, ohne Lücke
  *  (factory#177: ein Bezieher mit 12.309 Zeichen Rest, Stand 2026-11-06, sprengte mit dem Kern von 16.572 sein Gesamtbudget). Der Raum sinkt nur zusammen mit einem bewusst erhöhten `KERN_BLOCK_BUDGET`; wächst ein Rest darüber, ist das ein Befund an den Bezieher.
  *  Lückenlos, damit der Probe-Erstbezug (`probe-erstbezug.mjs`, factory#234) mit vollem Raum und einem Kern ein Zeichen über dem Kern-Budget das Gesamtbudget reißt.
  *  Grenze: gerechnet wird mit dem Kern der Fabrik; im Bezieher trägt der Kern zusätzlich die Projektwert-Tabelle (wenige Dutzend Zeichen mehr). */
-export const PROJEKT_BLOCK_RAUM = 12_563;
+export const PROJEKT_BLOCK_RAUM = 12_800;
 
-/** Pur: Meldung, wenn Kern-Budget plus Projekt-Raum das Gesamtbudget von `AGENTS.md` übersteigt, sonst `null` (die Raum-Invariante, geprüft in `test/kern-block-budget.test.ts`). */
+/** Pur: Meldung, wenn Kern-Budget plus Projekt-Raum das Gesamtbudget von `AGENTS.md` übersteigt oder eine Lücke lässt, sonst `null` (die Raum-Invariante, Wächter `test/harness/raum-vertrag.test.ts`, in der Fabrik auch `check:contextsize`). */
 export function kernRaumBefund({ kern, raum, gesamt }) {
-  if (kern + raum <= gesamt) return null;
-  return `Kern-Budget ${kern} + Projekt-Raum ${raum} = ${kern + raum} > Gesamtbudget ${gesamt} von AGENTS.md: ein Bezieher mit Raum-großem Projekt-Block liefe nach dem Sync rot.`;
+  const summe = kern + raum;
+  if (summe > gesamt) return `Kern-Budget ${kern} + Projekt-Raum ${raum} = ${summe} > Gesamtbudget ${gesamt} von AGENTS.md: ein Bezieher mit Raum-großem Projekt-Block liefe nach dem Sync rot.`;
+  if (summe < gesamt) return `Kern-Budget ${kern} + Projekt-Raum ${raum} = ${summe} < Gesamtbudget ${gesamt} von AGENTS.md: Lücke von ${gesamt - summe} Zeichen, der Probe-Erstbezug (probe-erstbezug.mjs) würde sie nicht mehr belegen.`;
+  return null;
 }
 
 /** Zeichen des Blocks zwischen `marker.start` und `marker.ende` (zeilenenden-neutral) oder `null`, wenn ein Marker fehlt oder das Ende vor dem Start steht. Die Marker gibt der Aufrufer vor (`markerStart`/`markerEnde` aus `besitz-lib.mjs`), die Lib bleibt Blatt. */
@@ -92,15 +102,16 @@ export function kernBlockBefund({ text, fabrik, budget = KERN_BLOCK_BUDGET, mark
 }
 
 /** Zeichen-Budget je Agenten- und Skill-Datei (factory#307): `.claude/agents/*.md`, `.agents/skills/<name>/**` (SKILL.md und Zusatzdateien). Nur die verteilten Pfade aus dem Besitz-Manifest stehen hier (der Kern nennt keine Fabrik-Dateien);
- *  jede andere Datei dieser Ordner, auch eine projekt-eigene im Bezieher, bekommt `AGENTEN_SKILL_DEFAULT_BUDGET`. Gemessen OHNE Projektwerte (Block und Werte der Frontmatter-Zeilen; sie wachsen mit der Projekt-Config, nicht mit dem Kern).
+ *  jede andere Datei dieser Ordner, auch eine projekt-eigene im Bezieher, bekommt `AGENTEN_SKILL_DEFAULT_BUDGET`. Gemessen OHNE Projektwerte (`ohneProjektwerte`: Block samt Markern und Werte der Frontmatter-Zeilen; sie wachsen mit der Projekt-Config, nicht mit dem Kern).
  *  Kalibriert am 2026-11-11 (main e31542f): Ist + 10 %, aufgerundet auf 500 Zeichen. Ratchet: ein Budget sinkt nur, wächst es gegenüber der Merge-Base, wird `test/harness/kontext-budget-ratchet.test.ts` rot.
  *  Je Eintrag genau eine Zeile `{ file: "<pfad>", budget: <zahl> },` (der Ratchet-Test liest sie). Verfall: Prüftermin laut Wiedervorlage `regeln-verfall-2027-03` (ADR 0027). */
 export const AGENTEN_SKILL_BUDGETS = [
   { file: ".agents/skills/factory/SKILL.md", budget: 1_500 },
   { file: ".agents/skills/factory/ablauf.md", budget: 37_500 },
   { file: ".agents/skills/factory/plattform-windows.md", budget: 2_500 },
+  { file: ".agents/skills/factory/ticket-drift.md", budget: 2_500 },
   { file: ".agents/skills/factory/umsetzer-browser.md", budget: 2_000 },
-  { file: ".agents/skills/factory/umsetzer-fortsetzung.md", budget: 5_000 },
+  { file: ".agents/skills/factory/umsetzer-fortsetzung.md", budget: 3_000 },
   { file: ".agents/skills/factory/umsetzer-gruppen.md", budget: 3_500 },
   { file: ".agents/skills/factory/umsetzer-guard-proben.md", budget: 2_500 },
   { file: ".agents/skills/factory/umsetzer-pr-merge.md", budget: 4_000 },
@@ -125,13 +136,6 @@ export const AGENTEN_SKILL_BUDGETS = [
   { file: ".claude/agents/holdout-szenario.md", budget: 3_500 },
 ];
 
-/** Budget für jede Agenten- und Skill-Datei ohne Eintrag (gleich dem größten Budget der Liste, `test/agenten-skill-budget.test.ts` verlangt das). */
+/** Budget für jede Agenten- und Skill-Datei ohne Eintrag (gleich dem größten Budget der Liste, `test/agenten-skill-budget.test.ts` verlangt das).
+ *  Herleitung: eine Datei ohne Eintrag, auch eine projekt-eigene im Bezieher, wird nie größer als die größte Kern-Datei; der Default sinkt mit deren Budget und steigt nie (`kontext-budget-ratchet`). Bezieher-Fall: eigene Datei darüber kürzen oder in eine bedingte Zusatzdatei teilen, nur `ausnahmen.kontext` mit offenem Ticket. */
 export const AGENTEN_SKILL_DEFAULT_BUDGET = 37_500;
-
-/** Zeichen eines Textes ohne den Block von `marker.start` bis einschließlich `marker.ende` (zeilenenden-neutral); fehlt ein Marker oder steht das Ende vor dem Start, zählt der ganze Text. Die Marker gibt der Aufrufer vor (Blatt). */
-export function zeichenOhneBlock(text, { start, ende }) {
-  const a = text.indexOf(start);
-  const b = text.indexOf(ende);
-  if (a < 0 || b < a) return countChars(text);
-  return countChars(text.slice(0, a) + text.slice(b + ende.length));
-}

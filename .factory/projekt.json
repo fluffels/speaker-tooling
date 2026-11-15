@@ -184,6 +184,7 @@
     }
   },
   "rulesetSpiegel": ".github/ruleset-main-schutz.json",
+  "sammelChecks": [{ "workflow": "produkt-ci.yml", "job": "produkt-ci" }],
   "projektliterale": {
     "Speaker-Tooling": "speaker-tooling",
     "ST": "ST"

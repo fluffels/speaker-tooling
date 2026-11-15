@@ -9,7 +9,7 @@
 # gekaperte Releases). Security-Updates (Advisories) sind davon ausgenommen und kommen ohne Verzögerung (Dependabot-Doku, `cooldown`).
 version: 2
 updates:
-  - package-ecosystem: "npm"
+  - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: "weekly"
@@ -56,7 +56,7 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # Eine Gruppe über alle Action-Updates (auch major): Action-Bumps sind klein und als Batch gut zu prüfen.
-  - package-ecosystem: "github-actions"
+  - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: "weekly"
@@ -74,10 +74,28 @@ updates:
           - "patch"
     commit-message:
       prefix: "ci(actions)"
+    # Besitz-Workflows des Kerns: Bumps kommen per Factory-Update, ein Dependabot-PR darauf scheitert an check:factorydrift (Doctor-Punkt Dependabot-Ausschluss).
+    exclude-paths:
+      - .github/workflows/board-takt.yml
+      - .github/workflows/festgefahren.yml
+      - .github/workflows/dependabot-inbox.yml
+      - .github/workflows/internalrefs-pr-text.yml
+      - .github/workflows/wiedervorlage.yml
+      - .github/workflows/ticket-drift.yml
+      - .github/workflows/harness-doctor.yml
+      - .github/workflows/sicherheitspruefung.yml
+      - .github/workflows/alarm-rot-main.yml
+      - .github/workflows/factory-update.yml
+      - .github/workflows/codeql.yml
+      - .github/workflows/secret-scan.yml
+      - .github/workflows/dependency-review.yml
+      - .github/workflows/zizmor.yml
+      - .github/workflows/codescanning-inbox.yml
+      - .github/workflows/audit-einordnung.yml
 
   # --- Projekt-Einträge (Produkt, #11) ---
   # Backend: Parent-POM in /backend, das Modul app hängt über <modules> daran. Majors kommen einzeln.
-  - package-ecosystem: "maven"
+  - package-ecosystem: maven
     directory: "/backend"
     schedule:
       interval: "weekly"
@@ -97,7 +115,7 @@ updates:
 
   # Frontend: Angular-Familie samt vitest (@angular/build bindet vitest per Peer) in EINEM PR, dann die Sammelgruppe.
   # Ein roter Angular-Major-PR ist gewollt der Anlass für `ng update` (Migrationen, passender TypeScript-Bereich).
-  - package-ecosystem: "npm"
+  - package-ecosystem: npm
     directory: "/frontend"
     schedule:
       interval: "weekly"
@@ -135,7 +153,7 @@ updates:
   # Basis-Images der Dockerfiles. Java- und Node-Majors sind Stack-Entscheidungen (ADR 0001, .nvmrc), kein Auto-Vorschlag.
   # Alle FROM-Zeilen stehen als `<tag>@sha256:<digest>` (#24, Wächter: tools/produkt-struktur.mjs): Dependabot frischt den Digest
   # unter demselben Tag auf, der Cooldown (7 Tage) gilt auch dafür. Das Testcontainers-Literal in Java sieht Dependabot nicht.
-  - package-ecosystem: "docker"
+  - package-ecosystem: docker
     directories:
       - "/backend"
       - "/frontend"
@@ -152,7 +170,7 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # Images in compose.yaml, ebenfalls per Digest gepinnt (siehe Docker-Eintrag). Ein Postgres-Major macht das Datenverzeichnis inkompatibel (Migration nötig).
-  - package-ecosystem: "docker-compose"
+  - package-ecosystem: docker-compose
     directory: "/"
     schedule:
       interval: "weekly"

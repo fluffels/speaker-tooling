@@ -70,7 +70,11 @@ export function normPfad(pfad, { wurzel = null, worktree = null } = {}) {
 }
 
 /**
- * Pfade und Befehle ohne Benutzerordner, Worktree-Pfad und Repo-Wurzel (das Repo ist öffentlich). Die Wurzel kommt von
+ * Pfade und Befehle ohne Benutzerordner, Worktree-Pfad und Repo-Wurzel (das Repo ist öffentlich). Geschlossene Ersetzungsliste
+ * für den Benutzernamen: 1./2. Windows-Home (`C:/Users/<n>`, `/c/Users/<n>`) → `~`; 3. POSIX-Home (`/Users/<n>`, `/home/<n>`) am
+ * Pfadanfang (Zeilenanfang, Leerraum, Anführungszeichen, `=`, `(`) → `~`; 4. Claude-Code-Projektordner-Slug (`-Users-…`,
+ * `-home-…`, `<Laufwerk>--Users-…`) bis zum nächsten `/`, Leerraum, `"`, `'` oder `)` → `<projekt>`. Bekannte Grenze (geschlossene Liste,
+ * keine Regression): nicht erkannt werden POSIX-Pfade und Slugs nach `file://`-Schema, Backtick, `,`, `;`, `|`, `<` und `[`. Die Wurzel kommt von
  * außen (`git rev-parse --git-common-dir`, ohne `.git`), nie fest verdrahtet; beide Schreibweisen (`C:/…`, `/c/…`), mit und
  * ohne abschließenden Schrägstrich. Das Worktree-Präfix (`worktree`) kommt aus der Projekt-Config. Ohne `wurzel` bleibt nur die
  * Wurzel-Ersetzung aus, ohne `worktree` nur die Worktree-Ersetzung.
@@ -79,7 +83,9 @@ export function bereinige(text, { wurzel = null, worktree = null } = {}) {
   let t = String(text)
     .replace(/\\/g, "/")
     .replace(/[A-Za-z]:\/Users\/[^/\s"']+/g, "~")
-    .replace(/\/[a-z]\/Users\/[^/\s"']+/gi, "~");
+    .replace(/\/[a-z]\/Users\/[^/\s"']+/gi, "~")
+    .replace(/(^|[\s"'=(])\/(?:Users|home)\/[^/\s"')]+/g, "$1~")
+    .replace(/(?<=^|[\s"'=(/])(?:[A-Za-z]-)?-(?:Users|home)-[^/\s"')]+/g, "<projekt>");
   if (worktree) t = t.replace(new RegExp(`\\S*${worktreeKern(worktree)}(?:/|(?=\\s|$))`, "g"), "<wt>/");
   const varianten = wurzel ? wurzelVarianten(wurzel) : [];
   if (varianten.length) t = t.replace(new RegExp(`(?:${varianten.map(escapeRegex).join("|")})(?:/|(?=[\\s"']|$))`, "gi"), "<repo>/");
@@ -159,3 +165,19 @@ export function ticketZaehlung(laeufe) {
 /** Warnzeile der Standardauswertungen (#1646): die Mediane gelten je Lauf, nicht je Ticket; leer ohne Ticket mit mehreren Läufen. */
 export const mehrlaufHinweis = (mehrlauf) =>
   mehrlauf > 0 ? `Mediane je Lauf, nicht je Ticket (${mehrlauf} Tickets mit mehreren Läufen); Ticket-Schnitt: kontext-treiber --je-ticket` : "";
+
+/**
+ * Ordnet Tickets ihrem Agententyp zu (A/B-Messungen, factory#236: die Zuordnung steht je Messung vorab fest, hier nur die Prüfseite). `typenJeTicket`: `Map` oder Objekt `{ ticket: [Typ…] }` mit den Typen, in denen das Ticket Läufe hat.
+ * Ein Ticket mit genau einem Typ kommt in `gruppen[typ]`, eines mit mehreren (`beide`) oder ohne (`keiner`) in `ungueltig`. Pur.
+ */
+export function armeZuordnen(typenJeTicket) {
+  const eintraege = typenJeTicket instanceof Map ? [...typenJeTicket] : Object.entries(typenJeTicket).map(([t, v]) => [Number(t), v]);
+  const gruppen = {};
+  const ungueltig = [];
+  for (const [ticket, rohTypen] of eintraege) {
+    const typen = [...new Set(rohTypen)].sort();
+    if (typen.length === 1) (gruppen[typen[0]] ??= []).push(ticket);
+    else ungueltig.push({ ticket, grund: typen.length === 0 ? "keiner" : "beide", typen });
+  }
+  return { gruppen, ungueltig };
+}

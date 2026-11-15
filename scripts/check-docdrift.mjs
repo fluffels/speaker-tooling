@@ -34,6 +34,8 @@
  *      (Kern der Regex: Pfad auf `.md`, ein Leerzeichen, dann das Trennzeichen):
  *        (a) `<pfad>.md › <Abschnitt>`           (b) `<pfad>.md § <Abschnitt>` (auch `§2a`; deckt `AGENTS.md § …` ab)
  *        (c) Ketten `<pfad>.md › A › B`: jedes Segment wird gegen dieselbe Zieldatei geprüft.
+ *        (d) Zitatform `<pfad>.md › „A“` / `§ „A“` (factory#403): nur das erste Zitat, gegen dieselbe Zieldatei.
+ *            Der Lookbehind der Regex ist gleichwertig zum Pfadanfang (leftmost-greedy), keine Sabotage-Form. Nicht erkannt: schließendes ” (U+201D), die Form ‚A‘ und die Fabrik-Form `<pfad>.md (Fabrik) › „A“` (sie prüft nur die Fabrik).
  *      Der Abschnittstext endet am Zeilenende oder an Backtick, `"`, `“`, `”`, `„`, `]`, `|`.
  *      Gescannt: alle Markdown-Dateien des Gates plus `scripts/**` (`.mjs`, `.cjs`, `.js`: Kommentare und
  *      Strings); in Markdown sind Code-Fences und Inline-Code maskiert. Übersprungen: Abschnitt mit `<`
@@ -47,8 +49,8 @@
  *      Verweises und des Abschnitts stimmen auf einem gemeinsamen Präfix von mindestens
  *      min(Abschnittswörter, Verweiswörter bis zum ersten `. , ; : ( ) ! ?`, 2) Wörtern überein.
  *      Grenze: Prosa direkt hinter dem Abschnittsnamen ohne Satzzeichen („<Datei> › Name gilt“) zählt
- *      zum Namen und ist rot; Abschnittsnamen mit Satzzeichen abschließen. Namen in Anführungszeichen
- *      direkt hinter dem Trenner und Verweise aus Test-Dateien prüft das Gate nicht.
+ *      zum Namen und ist rot; Abschnittsnamen mit Satzzeichen abschließen. Verweise aus Test-Dateien
+ *      und Zitate in Code-Fences prüft das Gate nicht.
  *
  * Bewusst ein reines Node-Skript (nur Builtins), analog zu check-docmap.mjs/
  * check-size.mjs: läuft plattformübergreifend über `npm run check:docdrift` und
@@ -228,7 +230,8 @@ export function auditDocDrift(rootDir = ROOT) {
 
 // ── Abschnittsverweise (factory#157) ─────────────────────────────────────────────
 
-const ABSCHNITT_VERWEIS = /(?<![\w./-])([\w./-]*\w\.md) (›|§) ?([^\n`"“”„\]|]*)/g;
+/** Muster 8: `<pfad>.md › A` / `§ A`. Exportiert, damit Wächter ihre Nebenformen daraus ableiten (factory#245) statt zu kopieren. */
+export const ABSCHNITT_VERWEIS = /(?<![\w./-])([\w./-]*\w\.md) (›|§) ?([^\n`"“”„\]|]*)/g;
 const SANFTER_STOPP = /[.,;:()!?]/;
 
 /** Textverweise `<pfad>.md › A › B` und `<pfad>.md § A` in `text` (Muster 8 im Kopfkommentar): `[{ pfad, trenner, segmente, index }]`; leere Segmente und Platzhalter (`<` am Anfang) entfallen. Markdown wird vorher von Code maskiert. */
@@ -242,6 +245,15 @@ export function abschnittVerweise(text, { istMarkdown = false } = {}) {
     if (segmente.length > 0) treffer.push({ pfad: m[1], trenner: m[2], segmente, index: m.index });
   }
   return treffer;
+}
+
+/** Zitatform `<pfad>.md › „A“` / `§ „A“` (auch `(Fabrik) ›`): Muster 8 sieht den Abschnitt nicht (`„` beendet ihn, das Segment ist leer). `fabrik` = mit ` (Fabrik)`. factory#403 L6: das Gate prüft die normale Form, die Fabrik-Form prüft nur die Fabrik. */
+export const ZITAT_VERWEIS = /(?<![\w./-])([\w./-]*\w\.md)( \(Fabrik\))? (›|§) ?„([^"“\n]+)["“]/g;
+
+/** Zitatverweise in `text`: `[{ pfad, trenner, segmente: [A], index, fabrik }]`. Markdown wird vorher von Code maskiert. */
+export function zitatVerweise(text, { istMarkdown = false } = {}) {
+  const quelle = istMarkdown ? codeMaskiert(text) : text;
+  return [...quelle.matchAll(ZITAT_VERWEIS)].map((m) => ({ pfad: m[1], trenner: m[3], segmente: [m[4].trim()], index: m.index, fabrik: m[2] !== undefined }));
 }
 
 /** Normalisierte Wortliste eines Abschnittsnamens: klein, ohne `**`/Backticks/Link-Syntax, `(…#<nr>)`-Herkunft und `§`; Satzzeichen trennen Wörter, reine Striche entfallen. */
@@ -300,7 +312,7 @@ function skriptDateien(rootDir, ordner = "scripts") {
   });
 }
 
-/** 8. Abschnittsverweise (factory#157): `[{ file, art: "abschnitt" | "ziel", pfad, trenner, segment, ziel }]`. Ziel fehlt → `art: "ziel"`; im Bezieher bleibt das still, wenn der Verweis in verteiltem Besitz-Text steht und das Ziel kein Besitz ist (#110). Ein vorhandenes Ziel wird gegen seine Abschnitte geprüft, außer im Bezieher bei einem Verweis aus Besitz-Text auf einen Anker-Stub (`istAnkerStub`: nur Überschriften, der Fettdruck-Abschnitt fehlt dort; die Fabrik prüft gegen die volle Seite). Der Vertrag für Kern-Verweise auf AGENTS.md-Titel (ein `AGENTS.md`-Verweis trifft den Kern-Block, ein `Projekt-Block`-Verweis die Vorlage) gehört `test/harness/agents-refs.test.ts`. */
+/** 8. Abschnittsverweise (factory#157): `[{ file, art: "abschnitt" | "ziel", pfad, trenner, segment, ziel }]`. Ziel fehlt → `art: "ziel"`; im Bezieher bleibt das still, wenn der Verweis in verteiltem Besitz-Text steht und das Ziel kein Besitz ist (#110). Ein vorhandenes Ziel wird gegen seine Abschnitte geprüft, außer im Bezieher bei einem Verweis aus Besitz-Text auf einen Anker-Stub (`istAnkerStub`: nur Überschriften, der Fettdruck-Abschnitt fehlt dort; die Fabrik prüft gegen die volle Seite). Der Vertrag für Kern-Verweise auf AGENTS.md-Titel (ein `AGENTS.md`-Verweis trifft den Kern-Block, ein `Projekt-Block`-Verweis die Vorlage) gehört `test/harness/besitz-abschnittsverweise.test.ts`. */
 function auditAbschnittVerweise(rootDir, mdFiles, content) {
   const abschnittCache = new Map();
   const titelVon = (ziel) => {
@@ -311,7 +323,7 @@ function auditAbschnittVerweise(rootDir, mdFiles, content) {
   const fehler = [];
   const dateien = [...mdFiles.map((f) => [f, true]), ...skriptDateien(rootDir).map((f) => [f, false])];
   fuerDokuTexte(rootDir, dateien, content, ({ f, text, istMarkdown, still, imBesitz }) => {
-    for (const v of abschnittVerweise(text, { istMarkdown })) {
+    for (const v of [...abschnittVerweise(text, { istMarkdown }), ...zitatVerweise(text, { istMarkdown }).filter((z) => !z.fabrik)]) {
       const ziel = [v.pfad, posix.join(posix.dirname(f), v.pfad)].find(istDatei);
       const basis = { file: f, pfad: v.pfad, trenner: v.trenner };
       if (ziel === undefined) {

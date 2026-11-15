@@ -8,7 +8,7 @@
  *    (Slice gegen die Merge-Base, dieselbe Basis wie `check:diffsize`). Kein Gate, ersetzt nie den vollen Lauf.
  *
  * Die Kette wird aus `package.json` aufgelöst (`ketteAusPackage`, dieselbe Auflösung wie docgen/docdrift), nicht hier gepflegt:
- * ein neues Gate läuft automatisch in beiden Modi mit. Die CI fährt weiter das rohe `npm run verify`.
+ * ein neues Gate läuft automatisch in beiden Modi mit. Die CI fährt `verifyKompakt` (alle Schritte, nur rote Blöcke, in GitHub Actions ungekürzt).
  * Fail-closed: kann der Slice nicht sicher bestimmt werden, laufen Lint und Test voll.
  */
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { resolveBase } from "./check-basis.mjs";
 import { AUFRUF_EXIT, flagsLesen } from "./flag-lib.mjs";
-import { ketteAusPackage } from "./docs-gen/npm-ketten.mjs";
+import { gateBefehlName, ketteAusPackage } from "./docs-gen/npm-ketten.mjs";
 import { ohneFarbcodes } from "./regex-lib.mjs";
 
 const WURZEL = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,7 +58,7 @@ export function kuerze(text, schritt) {
   const zeilen = String(text ?? "").replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n");
   if (zeilen.length <= MAX_ZEILEN) return zeilen.join("\n");
   const weg = zeilen.length - KOPF - ENDE;
-  return [...zeilen.slice(0, KOPF), `… ${weg} Zeilen gekürzt, volle Ausgabe: npm run ${schritt}`, ...zeilen.slice(-ENDE)].join("\n");
+  return [...zeilen.slice(0, KOPF), `… ${weg} Zeilen gekürzt, volle Ausgabe: ${gateBefehlName(schritt) === null ? `npm run ${schritt}` : `node scripts/gate-befehl.mjs ${gateBefehlName(schritt)}`}`, ...zeilen.slice(-ENDE)].join("\n");
 }
 
 /** Testdateien aus den `FAIL`-Zeilen der vitest-Ausgabe (auch Ladefehler einer Datei), je Datei einmal, in Reihenfolge. Pur. */
@@ -82,7 +82,7 @@ const testDateienZeile = (e) => {
 const sek = (ms) => `${Math.round(ms / 1000)} s`;
 
 /** Bericht aus den Schrittergebnissen `{ name, ok, ms, ausgabe, info, uebersprungen }`: grün eine Zeile, rot nur rote Blöcke + Summe. Pur. */
-export function bericht(ergebnisse, { modus = "kompakt", hinweis = "" } = {}) {
+export function bericht(ergebnisse, { modus = "kompakt", hinweis = "", ungekuerzt = false } = {}) {
   const rot = ergebnisse.filter((e) => !e.ok);
   const gesamt = ergebnisse.reduce((n, e) => n + e.ms, 0);
   const teil = (e) => `${e.name} ${e.uebersprungen ? "übersprungen" : e.ok ? "ok" : "ROT"} ${sek(e.ms)}${e.info ? ` (${e.info})` : ""}`;
@@ -91,7 +91,7 @@ export function bericht(ergebnisse, { modus = "kompakt", hinweis = "" } = {}) {
   if (!rot.length) {
     return `${kopf} grün · ${ergebnisse.length}/${ergebnisse.length} · ${sek(gesamt)} · ${ergebnisse.map(teil).join(", ")}${zusatz}`;
   }
-  const blöcke = rot.map((e) => `── ${e.name}: rot (Exit ${e.exit ?? "?"}, ${sek(e.ms)}) ──\n${testDateienZeile(e)}${kuerze(e.ausgabe, e.name)}`);
+  const blöcke = rot.map((e) => `── ${e.name}: rot (Exit ${e.exit ?? "?"}, ${sek(e.ms)}) ──\n${testDateienZeile(e)}${ungekuerzt ? String(e.ausgabe ?? "").replace(/\r\n/g, "\n").replace(/\n+$/, "") : kuerze(e.ausgabe, e.name)}`);
   const summe = `${kopf} ROT · ${ergebnisse.length - rot.length}/${ergebnisse.length} grün · ${sek(gesamt)} · rot: ${rot.map((e) => e.name).join(", ")}${zusatz}`;
   return `${blöcke.join("\n\n")}\n\n${summe}`;
 }
@@ -104,7 +104,8 @@ export function laufe({ schritte, engung = null, run, jetzt = () => Date.now() }
   const eng = engung && !engung.voll ? engung : null;
   return schritte.map((name) => {
     const t0 = jetzt();
-    let job = { art: "npm", schritt: name };
+    const gateName = gateBefehlName(name);
+    let job = gateName === null ? { art: "npm", schritt: name } : { art: "node", args: ["gate-befehl", gateName] };
     let info = "";
     if (eng && name === "lint") {
       if (!eng.lint.length) return { name, ok: true, uebersprungen: true, ms: 0, info: "keine Dateien" };
@@ -162,7 +163,7 @@ function ladeEngungUngesichert({ git: g, existiert, sammleTests: tests }) {
   return bestimmeEngung({ base, dateien, tests: tests() });
 }
 
-const BIN = { eslint: "node_modules/eslint/bin/eslint.js", vitest: "node_modules/vitest/vitest.mjs" };
+const BIN = { eslint: "node_modules/eslint/bin/eslint.js", vitest: "node_modules/vitest/vitest.mjs", "gate-befehl": "scripts/gate-befehl.mjs" };
 
 function echterLauf(job) {
   const opt = { cwd: WURZEL, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 };
@@ -185,7 +186,7 @@ export const statusVon = (r) => r.status ?? 1;
 
 /**
  * Der Lauf als Funktion (#1428 Z9): liefert den Exit-Code statt `process.exitCode` zu setzen, die Zugriffe sind injizierbar
- * (`deps.pkg`, `deps.ladeEngung`, `deps.run`, `deps.log`, `deps.err`). Der Direktaufruf unten setzt `process.exitCode`.
+ * (`deps.pkg`, `deps.ladeEngung`, `deps.run`, `deps.log`, `deps.err`, `deps.env`). Der Direktaufruf unten setzt `process.exitCode`.
  */
 export function main(argv = process.argv.slice(2), deps = {}) {
   const { werte, fehler } = flagsLesen(argv, { changed: { type: "boolean" } });
@@ -200,7 +201,7 @@ Aufruf: node scripts/verify-lauf.mjs [--changed]`);
   const engung = changed ? lade() : null;
   const hinweis = engung?.voll ? `Lint und Test voll (${engung.grund})` : "";
   const ergebnisse = laufe({ schritte, engung, run });
-  log(bericht(ergebnisse, { modus: changed ? "changed" : "kompakt", hinweis }));
+  log(bericht(ergebnisse, { modus: changed ? "changed" : "kompakt", hinweis, ungekuerzt: (deps.env ?? process.env).GITHUB_ACTIONS === "true" }));
   return exitCode(ergebnisse);
 }
 

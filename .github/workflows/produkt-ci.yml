@@ -301,3 +301,18 @@ jobs:
         run: |
           echo "$ERGEBNISSE" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           echo "$ERGEBNISSE" | jq -e 'length > 0 and all(.[]; .result == "success")' > /dev/null
+
+  # Post-hoc-Netz auf main (wie alarm-red-main in ci.yml): ein roter Produkt-Lauf auf main öffnet ein Alarm-Issue. Die Mechanik wohnt im
+  # Kern-Workflow alarm-rot-main.yml. Der Job hängt am Aggregator (nicht in dessen needs: Zyklus; der Wächter tools/produkt-struktur.mjs nimmt genau diesen Aufruf aus).
+  alarm-rot-main:
+    name: Alarm bei rotem main
+    needs: [produkt-ci]
+    if: failure() && github.event_name == 'push'
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/alarm-rot-main.yml
+    with:
+      label: area:harness
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}

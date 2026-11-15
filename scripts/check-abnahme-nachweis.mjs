@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { resolveBase } from "./check-basis.mjs";
 import { fehlerText, ghJson } from "./gh-cli.mjs";
 import { issueKommentare } from "./fremdtext-lib.mjs";
-import { MAX_REVIEW_PAESSE, kleinGrund, parseNachweis, vertrauteAbnahmeMarker } from "./nachweis-lib.mjs";
+import { MAX_REVIEW_PAESSE, kleinGrund, markerUrteile, nurSzenarioOffen, parseNachweis, stufeZeile, vertrauteAbnahmeMarker } from "./nachweis-lib.mjs";
 import { groessenstufeAusGit, risikoMusterAus } from "./groessenstufe-lib.mjs";
 import { ladeProjektConfig, spracheAus, trenneConfigArg, umgebungsWert } from "./projekt-config-lib.mjs";
 import { zerlegeRepo } from "./repo-form.mjs";
@@ -51,7 +51,7 @@ export function vertrauterMarker(kommentare, owner, zeilen) {
 const WURZEL = fileURLToPath(new URL("..", import.meta.url));
 const menge = (urteil) => urteil.map((u) => `${u.k}:${u.wert}`).sort().join(",");
 
-/** Die Vorlage für die Fehlerausgabe (Format: Factory-Seite docs/agent-harness.md §3a). */
+/** Die Vorlage für die Fehlerausgabe (Format: Factory-Seite [docs/agent-harness.md §3a](../docs/agent-harness.md#3a-langfassung-der-harten-regeln-ausgelagert-aus-agentsmd)). */
 const vorlage = (zeilen) =>
   `${zeilen.abnahme}: head=<sha> durchgaenge=<n> urteil=K1:erfuellt,…   |   ${zeilen.abnahme}: entfaellt — <Grund>   |   Größenstufe S: ${zeilen.abnahme}: entfaellt — klein: <Begründung>`;
 
@@ -70,10 +70,17 @@ function bewerteUrteil(urteil, liste, nachMerge) {
   return fehler;
 }
 
-/** Cap-Regel: die Review-Zeile trägt `runden` und deckt `durchgaenge` der Abnahme. */
-function bewerteCap(a, review) {
+/**
+ * Anzahl der Durchgänge, die nur wegen `ursache=szenario` nicht bestanden (jeder nicht erfüllte Wert trägt die Ursache szenario, nichts nicht prüfbar): kein Fix, also kein Lens-Pass, sie zählen nicht gegen das Cap. Pur.
+ */
+export function zaehleSzenarioDurchgaenge(markers) {
+  return markers.filter((m) => nurSzenarioOffen(markerUrteile(m))).length;
+}
+
+/** Cap-Regel: die Review-Zeile trägt `runden` und deckt `durchgaenge` der Abnahme, abzüglich der reinen Szenario-Durchgänge (`szenario`). */
+function bewerteCap(a, review, szenario = 0) {
   if (!review || !Number.isInteger(review.runden)) return ["Review-Zeile fehlt oder runden ist keine Zahl: die Abnahme zählt gegen das Cap der Review-Pässe."];
-  if (a.durchgaenge <= review.runden) return [];
+  if (a.durchgaenge - szenario <= review.runden) return [];
   return [
     `durchgaenge=${a.durchgaenge} ist größer als runden=${review.runden}: jeder Abnahme-Durchgang nach der Konvergenz zählt als Pass, ` +
       `die Review-Zeile muss runden >= durchgaenge tragen (Cap ${MAX_REVIEW_PAESSE} Pässe, darüber nur mit Zusatzpass).`,
@@ -84,8 +91,8 @@ function bewerteCap(a, review) {
  * Cap-Regel und head-Regel (`abnahmeHead`: {bekannt, imSlice, nachReviewHead, konfliktMerges, aenderungsCommits}).
  * Mit `reviewOverride` (gültige Review-Override-Zeile im Slice) entfallen Review-Zeile, Cap und der Vergleich mit dem Review-head; die übrigen head-Regeln gelten weiter.
  */
-function bewerteHead(a, review, abnahmeHead, reviewOverride = false) {
-  const fehler = reviewOverride ? [] : bewerteCap(a, review);
+function bewerteHead(a, review, abnahmeHead, reviewOverride = false, szenario = 0) {
+  const fehler = reviewOverride ? [] : bewerteCap(a, review, szenario);
   if (!abnahmeHead.bekannt) return [...fehler, `Abnahme: head=${a.head} ist kein bekannter Commit.`];
   if (!abnahmeHead.imSlice) return [...fehler, `Abnahme: head=${a.head} liegt nicht im Slice dieses PR.`];
   if (!reviewOverride && review?.head && !abnahmeHead.nachReviewHead) fehler.push(`Abnahme: head=${a.head} ist kein Nachfahre des Review-head ${review.head}.`);
@@ -116,10 +123,11 @@ function bewerteEntfaellt(a, ticket, stufe, zeilen) {
 /**
  * Bewertet den Abnahme-Nachweis; liefert `fehler[]` (leer = grün). Pur.
  * `reviewOverride` (bool): eine gültige Review-Override-Zeile steht im Slice, Cap- und Review-head-Vergleich entfallen.
+ * `szenarioDurchgaenge` (Zahl, Standard 0): Durchgänge nur mit `ursache=szenario` (`zaehleSzenarioDurchgaenge`), sie zählen nicht gegen das Cap.
  * `stufe` (`"S"` | `"voll"`, Standard `voll`): die aus dem Diff berechnete Größenstufe, nur für `entfaellt — klein: …` relevant.
  * `ticket` = `{nr, kriterien: <Liste aus kriterien()>, nachMerge: <Präfix aus sprache.spezifikation>}` oder `null` (kein Ticket verknüpft), `marker` = Ergebnis von `vertrauterMarker`.
  */
-export function bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, reviewOverride = false, stufe = "voll" }) {
+export function bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, reviewOverride = false, stufe = "voll", szenarioDurchgaenge = 0 }) {
   const a = nachweis.abnahme;
   if (!a) return [`${zeilen.abnahme}: Zeile fehlt. Ablauf: node scripts/abnahme.mjs kriterien <nr>; Vorlage: ${vorlage(zeilen)}`];
   if (a.art === "ungueltig") return [`${zeilen.abnahme}: ungültig (${a.grund ? `${a.grund}: ` : ""}${a.zeile}). Vorlage: ${vorlage(zeilen)}`];
@@ -127,7 +135,7 @@ export function bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, 
     return ticket && ticket.kriterien.length > 0 ? bewerteEntfaellt(a, ticket, stufe, zeilen) : [];
   }
   if (!ticket) return [`${zeilen.abnahme}: ein Urteil braucht ein verknüpftes Ticket (Schließ-Referenz im PR-Body).`];
-  return [...bewerteUrteil(a.urteil, ticket.kriterien, ticket.nachMerge), ...bewerteHead(a, nachweis.review, abnahmeHead, reviewOverride), ...bewerteSpur(a, marker)];
+  return [...bewerteUrteil(a.urteil, ticket.kriterien, ticket.nachMerge), ...bewerteHead(a, nachweis.review, abnahmeHead, reviewOverride, szenarioDurchgaenge), ...bewerteSpur(a, marker)];
 }
 
 /** Ausgabe bei aktivem Review-Override (L24a): was der Override an der Abnahme-Prüfung auslässt. */
@@ -168,19 +176,21 @@ export function checkAbnahmeNachweis({ runGit, gh = (a) => ghJson(a), env = proc
   if (!base) return { ok: false, fehler: ["Keine Vergleichs-Basis auflösbar (flacher Checkout?): Abnahme-Nachweis nicht prüfbar."], invalid: [] };
   let fehler;
   let rov = { reason: null, invalid: [] };
+  let stufe = null; // einmal berechnet: Anzeige (factory#402 L26) und Bewertung von `entfaellt — klein` (factory#271, nur dort zählt sie)
   let entwurf = false; // erst der Live-Abruf (oder der Ereigniswert ohne PR-Nummer) setzt ihn; ein Fehler davor bleibt streng
   try {
     if (git(["rev-parse", "HEAD"]).trim() === base) return { ok: true, skipped: true, fehler: [], invalid: [] };
+    stufe = anzeigeStufe(git, base, config);
     const ov = sliceOverride(git, base, zeilen.abnahmeOverride);
-    if (ov.reason !== null) return { ok: true, override: ov.reason, overrideKey: zeilen.abnahmeOverride, fehler: [], invalid: ov.invalid };
+    if (ov.reason !== null) return { ok: true, override: ov.reason, overrideKey: zeilen.abnahmeOverride, fehler: [], invalid: [...ov.invalid], stufe };
     rov = sliceOverride(git, base, zeilen.reviewOverride);
     entwurf = entwurfLive({ gh, env, repo: repoVon(env, config) });
-    fehler = pruefe({ git, gh, env, config, zeilen, base, reviewOverride: rov.reason !== null });
+    fehler = pruefe({ git, gh, env, config, zeilen, base, reviewOverride: rov.reason !== null, stufe });
   } catch (e) {
     fehler = [`Fehler beim Prüfen des Abnahme-Nachweises (git/gh): ${fehlerText(e)}`];
   }
   const hinweise = rov.reason === null ? [] : [REVIEW_OVERRIDE_HINWEIS];
-  return { ok: fehler.length === 0 || entwurf, entwurf: entwurf && fehler.length > 0, fehler, hinweise, invalid: rov.invalid };
+  return { ok: fehler.length === 0 || entwurf, entwurf: entwurf && fehler.length > 0, fehler, hinweise, invalid: rov.invalid, stufe };
 }
 
 const repoVon = (env, config) => env.GITHUB_REPOSITORY || config.repo;
@@ -202,12 +212,11 @@ export function entwurfLive({ gh, env, repo }) {
   return pr.draft;
 }
 
-/** Die Größenstufe, nur wenn die Abnahme-Zeile `entfaellt` lautet (nur dort zählt sie, factory#271); sonst `voll`. */
-const stufeFuerEntfaellt = (nachweis, git, base, config) =>
-  nachweis.abnahme?.art === "entfaellt" ? groessenstufeAusGit(git, base, "HEAD", { ladeRisiko: () => risikoMusterAus(config) }).stufe : "voll";
+/** Größenstufe für die Anzeige (factory#402 L26) und die Bewertung von `entfaellt — klein` (factory#271); `groessenstufeAusGit` ist fail-closed (git- und Ladefehler ergeben `voll`) und wirft nicht. */
+const anzeigeStufe = (git, base, config) => groessenstufeAusGit(git, base, "HEAD", { ladeRisiko: () => risikoMusterAus(config) }).stufe;
 
 /** Der eigentliche Ablauf nach Override-Prüfung; wirft bei git- oder gh-Fehlern (der Aufrufer wertet das als rot). */
-function pruefe({ git, gh, env, config, zeilen, base, reviewOverride }) {
+function pruefe({ git, gh, env, config, zeilen, base, reviewOverride, stufe }) {
   const repo = repoVon(env, config);
   const { owner } = zerlegeRepo(repo);
   const nachweis = parseNachweis(git(["log", "--reverse", "--format=%B", `${base}..HEAD`]), zeilen);
@@ -222,12 +231,15 @@ function pruefe({ git, gh, env, config, zeilen, base, reviewOverride }) {
   }
   const abnahmeHead = nachweis.abnahme?.art === "urteil" ? leseAbnahmeHead(git, base, nachweis.abnahme.head, nachweis.review?.head) : null;
   let marker = null;
+  let szenarioDurchgaenge = 0;
   if (nachweis.abnahme?.art === "urteil") {
-    // Ohne PR-Nummer bleibt es rot (fail-closed), zeigt aber vorher die Head-Fehler (Konflikt-Merge hinter der Abnahme), damit der lokale Lauf sie sieht.
+    // Ohne PR-Nummer bleibt es rot (fail-closed), zeigt aber vorher die Head-Fehler (Konflikt-Merge hinter der Abnahme), damit der lokale Lauf sie sieht (ohne Kommentare kennt er die Szenario-Durchgänge nicht: eine Cap-Meldung kann lokal erscheinen, die die CI nicht zeigt).
     if (!/^\d+$/.test(umgebungsWert(env, "FACTORY_PR_NUMBER") ?? "")) return [...bewerteHead(nachweis.abnahme, nachweis.review, abnahmeHead, reviewOverride), "PR-Nummer fehlt (FACTORY_PR_NUMBER): die Spur ist nicht prüfbar."];
-    marker = vertrauterMarker(issueKommentare(umgebungsWert(env, "FACTORY_PR_NUMBER"), gh, repo), owner, zeilen);
+    const kommentare = issueKommentare(umgebungsWert(env, "FACTORY_PR_NUMBER"), gh, repo);
+    marker = vertrauterMarker(kommentare, owner, zeilen);
+    szenarioDurchgaenge = zaehleSzenarioDurchgaenge(vertrauteAbnahmeMarker(kommentare, owner, zeilen));
   }
-  return bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, reviewOverride, stufe: stufeFuerEntfaellt(nachweis, git, base, config) });
+  return bewerteAbnahme({ nachweis, ticket, marker, abnahmeHead, zeilen, reviewOverride, szenarioDurchgaenge, stufe });
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -244,11 +256,13 @@ function main(argv = process.argv.slice(2)) {
   }
   if (r.override) {
     console.log(`• geduldet: ${r.overrideKey} — ${r.override}`);
+    console.log(stufeZeile(r.stufe));
     console.log("✔ Abnahme-Nachweis ok (Override mit Begründung).");
     return;
   }
   meldeUngueltigeOverrides(r.invalid);
   for (const h of r.hinweise ?? []) console.log(`• ${h}`);
+  if (r.ok) console.log(stufeZeile(r.stufe));
   if (r.entwurf) {
     console.log("• Entwurf, nur Bericht (maßgeblich ist der Lauf nach ready_for_review):");
     for (const f of r.fehler) console.log(`  - ${f}`);

@@ -2,10 +2,12 @@
 #
 # Diese Datei ist informativ: der Agent mergt eine beabsichtigte Änderung dieser Pfade selbst und hinterlässt nach dem
 # Merge einen Audit-Kommentar. GitHub kann CODEOWNERS nicht aus einer Datei einbinden, darum steht die Liste hier noch
-# einmal; neue Pfade zuerst in .github/protected-paths.json eintragen, dann hier nachziehen (test/harness/harness-approval.test.ts
-# bewacht die Übereinstimmung). AGENTS.md steht bewusst ohne führenden Schrägstrich: es trifft jede Ebene, auch modul-lokale Dateien.
+# einmal; neue Pfade zuerst in .github/protected-paths.json eintragen, dann hier nachziehen (der Doctor-Punkt CODEOWNERS-Spiegel
+# bewacht die Übereinstimmung: node scripts/harness-doctor.mjs --pruefen). AGENTS.md steht bewusst ohne führenden Schrägstrich: es trifft jede Ebene, auch modul-lokale Dateien.
 
 /scripts/check-*.mjs @fluffels
+/scripts/layers.cjs @fluffels
+/scripts/schichten-kern.cjs @fluffels
 /scripts/slice-override.mjs @fluffels
 /scripts/ci-laeufe.mjs @fluffels
 /scripts/verify-lauf.mjs @fluffels

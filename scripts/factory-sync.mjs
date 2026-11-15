@@ -5,7 +5,7 @@
 // Erst-Übernahme-Schutz und Vorlagen (factory#118, `sync-abgleich-lib.mjs`): eine abweichende Ziel-Datei, die noch nicht im Stand steht, überschreibt erst `--uebernehmen <pfad>`; eine Vorlage wird nur angelegt.
 // Überschrieben wird nur Besitz (Datei, Block, JSON-Schlüssel), nie gemerged; Projektteile bleiben byte-gleich (einzige Ausnahme: der Link-Schritt unten schreibt Factory-Link-Refs und den Index, er legt fehlende Anker-Stub-Seiten an und erneuert reine Stubs). Hash und Vergleich
 // sind CRLF-neutral, geschrieben wird nur bei inhaltlicher Änderung im Zeilenende-Stil der Zieldatei. Erst alles prüfen, dann schreiben.
-// Hinweise ohne Fehler: eine Projektkopie einer Test-Hilfe (nicht verteilt), die von der Quelle abweicht (`testHilfeKopienAbweichend`); ein unbekannter Manifest-Versionsfehler trägt den Werkzeug-Hinweis.
+// Hinweise ohne Fehler: eine Projektkopie einer Test-Hilfe (nicht verteilt), die von der Quelle abweicht (`testHilfeKopienAbweichend`); jeder Quell-Manifest-Fehler trägt den Werkzeug-Hinweis (einmal je Lauf).
 // Link-Schritt (factory#131, nur mit `--tag`): auf dem Ergebnis des Sync-Plans (neue Texte, neuer Sync-Stand) prüft `linkSchritt` die Factory-Links des Ziels gegen den Baum des Tags
 // und stellt Refs und `.factory/factory-links.json` mit um; ein Link-Befund heißt Exit 1 und nichts geschrieben (auch mit `--trocken`), `--entwurf` macht keinen Link-Schritt.
 // Anker-Stubs (factory#167): eine Seite, auf die ein Kern-Link zeigt und die es im Ziel nicht gibt, legt `planeAnkerStubs` mit den verlinkten Überschriften und Factory-Links auf den Tag an; eine reine Stub-Seite (`istReinerStub`, nur Sync-Ausgabe) erneuert er bei jedem Sync (factory#166), jede andere vorhandene Seite wird nie angefasst.
@@ -19,13 +19,13 @@ import { collectMarkdown, istGelesenesMarkdown } from "./check-basis.mjs";
 import { befundZeile, INDEX_PFAD, istReinerStub, planeAnkerStubs, planeFactoryLinks, stubBefunde } from "./factory-links-lib.mjs";
 import { factoryRepoAus } from "./factory-seite.mjs";
 import { ausnahmenAus, factoryLinkAusnahmenAus, ladeProjektConfig, PROJEKT_CONFIG, PROJEKT_ROLLEN, ROLLEN_PFADE } from "./projekt-config-lib.mjs";
-import { einheitAusId, einheitHash, einheitId, eolVon, istErgaenzbar, istGanzeDatei, istVerteilteGanzdatei, MANIFEST_PFAD, manifestAusText, normalisiereEol, pruefeManifest, textHash, versionUnbekannt, wirdVerteilt } from "./besitz-lib.mjs";
+import { einheitAusId, einheitHash, einheitId, eolVon, istErgaenzbar, istGanzeDatei, istVerteilteGanzdatei, MANIFEST_PFAD, manifestAusText, markerEnde, markerStart, normalisiereEol, pruefeManifest, textHash, wirdVerteilt } from "./besitz-lib.mjs";
 import { rendereProjektwerte } from "./projektwert-lib.mjs";
 import { istModulEinheit, manifestKenntModule, MODUL_STANDARD, modulGewaehlt, modulWahl } from "./modul-wahl-lib.mjs";
 import { erstUebernahme, istVorlage } from "./sync-abgleich-lib.mjs";
 import { testHilfeKopienAbweichend } from "./besitz-extraktion.mjs";
 import { WERKZEUG_HINWEIS } from "./release-tag-lib.mjs";
-import { knappeBudgets, ueberBudget } from "./kontext-budget-lib.mjs";
+import { knappeBudgets, PROJEKT_BLOCK_RAUM, ueberBudget } from "./kontext-budget-lib.mjs";
 import { gitIn, LEER, leserFuerCommit, leserVomCommit, liesErgaenzung, projektMarkerHinweis, pruefeErgebnis, wendeTeileAn } from "./factory-sync-lib.mjs";
 import { quelleRepoAusText, STAND_PFAD, syncStandAusText } from "./sync-stand-lib.mjs";
 
@@ -38,14 +38,14 @@ const leseAltStand = (zielLies) => syncStandAusText(zielLies(STAND_PFAD)).stand;
 
 /** Fehler des Quell-Manifests: Schema, Projekt-Config nie Besitz, jede Besitz-Rolle (#1871) eine ganze, verteilte Einheit (die Rollen des Projekts stehen nicht im Manifest). */
 function manifestFehler(manifest, quelleLies) {
-  const fehler = pruefeManifest(manifest, quelleLies).map((m) => `Quell-Manifest: ${m}${versionUnbekannt(m) ? `
-Fix: ${WERKZEUG_HINWEIS}` : ""}`);
+  const fehler = pruefeManifest(manifest, quelleLies).map((m) => `Quell-Manifest: ${m}`);
   if (manifest.eintraege.some((e) => e.pfad === PROJEKT_PFAD)) fehler.push(`Quell-Manifest: ${PROJEKT_PFAD} ist Projekt-Config und nie Besitz`);
   for (const [rolle, pfad] of Object.entries(ROLLEN_PFADE)) {
     if (PROJEKT_ROLLEN.includes(rolle)) continue;
     const ganz = manifest.eintraege.some((e) => e.pfad === pfad && istVerteilteGanzdatei(e) && !istVorlage(e));
     if (!ganz) fehler.push(`Quell-Manifest: Rollen-Pfad '${pfad}' (${rolle}) ist keine verteilte Einheit (ganze Datei)`);
   }
+  if (fehler.length > 0) fehler.push(`Fix: ${WERKZEUG_HINWEIS}`);
   return fehler;
 }
 
@@ -76,11 +76,11 @@ function vorlagenDatei(pfad, quelleLies, zielConfig, quelleAusfuehrbar) {
   return { text: rendereProjektwerte(normalisiereEol(quelleLies(pfad)), zielConfig, pfad), neu: true, vorlage: true, ausfuehrbar: quelleAusfuehrbar(pfad) };
 }
 
-/** Hinweise auf Dateien im Ziel am Pfad einer Moduleinheit, deren Modul nicht gewählt ist (vermutlich Projektkopie; geschrieben wird nichts). */
-function projektkopienAbgewaehlt(manifest, gewaehlt, zielLies) {
+/** Hinweise auf Dateien im Ziel am Pfad einer Moduleinheit, deren Modul nicht gewählt ist (Modulkopie, factory#244; geschrieben wird nichts); `begruendet` sind die Pfade aus `modulKopien`. */
+function projektkopienAbgewaehlt(manifest, gewaehlt, zielLies, begruendet) {
   return manifest.eintraege
-    .filter((e) => istModulEinheit(e) && !modulGewaehlt(e, gewaehlt) && zielLies(e.pfad) !== null)
-    .map((e) => `Modul '${e.modul}' nicht gewählt, im Ziel liegt ${e.pfad} (Projektkopie?): Modul wählen oder als Projektdatei führen`);
+    .filter((e) => istModulEinheit(e) && !modulGewaehlt(e, gewaehlt) && zielLies(e.pfad) !== null && !begruendet.includes(e.pfad))
+    .map((e) => `Modul '${e.modul}' nicht gewählt, im Ziel liegt ${e.pfad} (Modulkopie): Modul wählen, Datei löschen oder in modulKopien (${PROJEKT_CONFIG}) mit Grund führen`);
 }
 
 /** Meldungen zu Einheiten des alten Stands, die jetzt nicht mehr verteilt werden (Vorlage, kein Besitz mehr, anderer Ring); im Ziel wird nie gelöscht. */
@@ -105,20 +105,21 @@ function altStandMeldungen(alt, sortiert, alle, manifest, gewaehlteModule) {
 }
 
 /**
- * Modulwahl des Ziels (factory#119): `{ gewaehlt, fehler, meldungen }`. Nur wenn das Quell-Manifest Einheiten mit `modul` hat, wird die Ziel-Config gelesen;
+ * Modulwahl des Ziels (factory#119): `{ gewaehlt, fehler, meldungen, begruendet }` (`begruendet`: Pfade aus `modulKopien`). Nur wenn das Quell-Manifest Einheiten mit `modul` hat, wird die Ziel-Config gelesen;
  * ohne den Schlüssel `module` gilt der Standard, die Namen prüft `modulWahl` gegen das Quell-Manifest (ein neues Modul ist sofort wählbar).
  */
 function waehleModule(manifest, zielConfig) {
-  if (!manifestKenntModule(manifest)) return { gewaehlt: MODUL_STANDARD, fehler: [], meldungen: [] };
+  if (!manifestKenntModule(manifest)) return { gewaehlt: MODUL_STANDARD, fehler: [], meldungen: [], begruendet: [] };
   let config;
   try {
     config = zielConfig();
   } catch (err) {
-    return { gewaehlt: [], fehler: [`Ziel-Config: ${err.message}`], meldungen: [] };
+    return { gewaehlt: [], fehler: [`Ziel-Config: ${err.message}`], meldungen: [], begruendet: [] };
   }
   const w = modulWahl(config, manifest, { configPfad: PROJEKT_CONFIG });
   const liste = (l) => (l.length > 0 ? l.join(", ") : "keine");
-  return { gewaehlt: w.gewaehlt, fehler: w.fehler, meldungen: [`Module: gewählt ${liste(w.gewaehlt)}; nicht gewählt ${liste(w.nichtGewaehlt)} (Wahl: module in ${PROJEKT_CONFIG})`] };
+  const begruendet = (config.modulKopien ?? []).map((k) => k.datei);
+  return { gewaehlt: w.gewaehlt, fehler: w.fehler, begruendet, meldungen: [`Module: gewählt ${liste(w.gewaehlt)}; nicht gewählt ${liste(w.nichtGewaehlt)} (Wahl: module in ${PROJEKT_CONFIG})`] };
 }
 
 /**
@@ -154,7 +155,7 @@ export function planeSync({
   const nachPfad = new Map();
   const alle = manifest.eintraege.filter((e) => wirdVerteilt(e) && modulGewaehlt(e, wahl.gewaehlt));
   const verteilt = alle.filter((e) => !istVorlage(e));
-  res.meldungen.push(...projektkopienAbgewaehlt(manifest, wahl.gewaehlt, zielLies));
+  res.meldungen.push(...projektkopienAbgewaehlt(manifest, wahl.gewaehlt, zielLies, wahl.begruendet));
   const alt = leseAltStand(zielLies);
   for (const e of verteilt) nachPfad.set(e.pfad, [...(nachPfad.get(e.pfad) ?? []), e]);
   const { erg, fehler: ergFehler } = liesErgaenzungen(verteilt, quelleLies, zielLies);
@@ -275,6 +276,12 @@ function setzeAusfuehrbitImIndex(ziel, pfade, git, out) {
   return `Ausführbit im Index von '${ziel}' fehlt (erwartet 100755): ${falsch.join(", ")}\nFix: git -C <ziel> update-index --add --chmod=+x -- ${falsch.join(" ")}`;
 }
 
+/** Hinweistext für eine Kontextdatei mit kleinem Rest (Anteilsregel). */
+const knappText = (k) => `Hinweis: Kontextbudget knapp: ${k.file} ${k.chars} von ${k.budget} Zeichen (Rest ${k.rest}); der nächste Kern-Zuwachs kann check:contextsize rot machen, Projekt-Block kürzen`;
+
+/** Hinweistext für einen Projekt-Block über dem Projekt-Raum (Raum-Vertrag, factory#237): im Gesamtbudget, aber der Kern darf bis zu seinem Budget wachsen. Der Sync kürzt nie selbst. */
+const raumText = (k) => `Hinweis: Kontextbudget knapp: ${k.file} Projekt-Block ${k.projekt} Zeichen > Projekt-Raum ${k.raum}; der nächste Kern-Zuwachs kann check:contextsize rot machen, Projekt-Block kürzen (der Sync kürzt nie selbst)`;
+
 /** Hinweiszeilen, wenn eine Kontextdatei nach dem Sync über dem Budget des ausführenden Werkzeugs läge; Text aus dem Plan, sonst aus dem Ziel; geduldete Ausnahmen des Ziels ohne Hinweis. */
 function kontextHinweise(plan, ziel) {
   const lies = (datei) => plan.dateien.get(datei)?.text ?? liesDatei(ziel)(datei);
@@ -285,7 +292,8 @@ function kontextHinweise(plan, ziel) {
     // Config des Ziels nicht lesbar: ohne Ausnahmen messen, die Warnung ist nur ein Hinweis.
   }
   const ueber = ueberBudget({ lies, ausnahmen }).map((k) => `Hinweis: Kontextbudget: ${k.file} hätte ${k.chars} Zeichen > Budget ${k.budget}; im Ziel wird check:contextsize rot, Projekt-Block kürzen (nie Wächter-gebundene Sätze)`);
-  const knapp = knappeBudgets({ lies, ausnahmen }).map((k) => `Hinweis: Kontextbudget knapp: ${k.file} ${k.chars} von ${k.budget} Zeichen (Rest ${k.rest}); der nächste Kern-Zuwachs kann check:contextsize rot machen, Projekt-Block kürzen`);
+  const raum = { file: "AGENTS.md", zeichen: PROJEKT_BLOCK_RAUM, marker: { start: markerStart("kern"), ende: markerEnde("kern") } };
+  const knapp = knappeBudgets({ lies, ausnahmen, raum }).map((k) => (k.raum === undefined ? knappText(k) : raumText(k)));
   return [...ueber, ...knapp];
 }
 
